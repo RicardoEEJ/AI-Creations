@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A gentle, visual space for building habits and making time for what matters."
+    />
+    <title>Steady — one step at a time</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Steady home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M7 21.5 13.2 15l4.2 4.1L25 10" />
+              <path d="M19.5 10H25v5.5" />
+              <circle cx="7" cy="21.5" r="2" />
+            </svg>
+          </span>
+          <span>steady</span>
+        </a>
+        <div class="topbar-actions">
+          <span class="today-label" id="today-label"></span>
+          <button class="sound-toggle" id="sound-toggle" type="button" aria-pressed="false">
+            <span aria-hidden="true" id="sound-icon">♪</span>
+            <span id="sound-label">Sound off</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="storage-notice" id="storage-notice" role="status" hidden></div>
+
+      <main>
+        <section class="welcome-row" aria-labelledby="welcome-title">
+          <div class="welcome-copy">
+            <p class="eyebrow"><span class="eyebrow-dot"></span> A LITTLE SPACE TO RESET</p>
+            <h1 id="welcome-title">Make room for <span>what matters.</span></h1>
+            <p class="welcome-description">
+              One thing at a time. Your day, at your pace.
+            </p>
+          </div>
+          <aside class="quote-card" aria-label="A little encouragement">
+            <span class="quote-sparkle" aria-hidden="true">✳</span>
+            <p id="quote-text"></p>
+            <button class="text-button" id="new-quote" type="button">A little more encouragement</button>
+          </aside>
+        </section>
+
+        <section class="summary-grid" aria-label="Today's overview">
+          <article class="summary-card">
+            <span class="summary-icon icon-green" aria-hidden="true">✓</span>
+            <div>
+              <p class="summary-label">Done today</p>
+              <p class="summary-value" id="done-count">0</p>
+            </div>
+          </article>
+          <article class="summary-card">
+            <span class="summary-icon icon-yellow" aria-hidden="true">◷</span>
+            <div>
+              <p class="summary-label">In progress</p>
+              <p class="summary-value" id="active-count">0</p>
+            </div>
+          </article>
+          <article class="summary-card">
+            <span class="summary-icon icon-lilac" aria-hidden="true">♡</span>
+            <div>
+              <p class="summary-label">Habits resisted</p>
+              <p class="summary-value" id="resisted-count">0</p>
+            </div>
+          </article>
+        </section>
+
+        <div class="content-grid">
+          <div class="main-column">
+            <section class="panel tasks-panel" aria-labelledby="tasks-title">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">YOUR FOCUS BOARD</p>
+                  <h2 id="tasks-title">Today’s tasks</h2>
+                </div>
+                <button class="button button-primary" id="open-task-dialog" type="button">
+                  <span aria-hidden="true">+</span> Add a task
+                </button>
+              </div>
+
+              <div class="task-list" id="task-list"></div>
+              <div class="empty-state" id="task-empty">
+                <span class="empty-icon" aria-hidden="true">✦</span>
+                <h3>A fresh page</h3>
+                <p>Add one small task to get started. It’s okay to begin with just one.</p>
+                <button class="button button-secondary" id="empty-add-task" type="button">Add your first task</button>
+              </div>
+              <p class="panel-footnote">
+                Colors show how much of your time is left. Hover or focus a color for a kind word.
+              </p>
+            </section>
+
+            <section class="panel routines-panel" aria-labelledby="routines-title">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">READY WHEN YOU ARE</p>
+                  <h2 id="routines-title">Daily habits</h2>
+                </div>
+                <span class="section-count" id="routine-count">0 saved</span>
+              </div>
+              <p class="section-description">
+                Your saved habits are here whenever you want to make time for them today.
+              </p>
+              <div class="routine-list" id="routine-list"></div>
+              <div class="routine-empty" id="routine-empty">
+                Habits you choose to repeat will show up here tomorrow.
+              </div>
+            </section>
+          </div>
+
+          <aside class="side-column">
+            <section class="panel habit-panel" aria-labelledby="habit-title">
+              <div class="habit-panel-heading">
+                <span class="habit-symbol" aria-hidden="true">↗</span>
+                <div>
+                  <p class="eyebrow">GENTLE RESET</p>
+                  <h2 id="habit-title">Habits to let go</h2>
+                </div>
+              </div>
+              <p class="section-description">
+                No judgment, just a little more awareness. Mark the days you choose a different path.
+              </p>
+              <button class="button button-outline button-full" id="open-bad-dialog" type="button">
+                <span aria-hidden="true">+</span> Add a habit to change
+              </button>
+              <div class="bad-habit-list" id="bad-habit-list"></div>
+              <div class="bad-habit-empty" id="bad-habit-empty">
+                Small changes count. Add a habit whenever you’re ready.
+              </div>
+            </section>
+
+            <section class="panel color-guide" aria-labelledby="guide-title">
+              <p class="eyebrow">YOUR COLOR GUIDE</p>
+              <h2 id="guide-title">A quick glance, not a grade.</h2>
+              <ul class="legend-list">
+                <li><span class="legend-dot dot-green"></span><span><strong>Green</strong> · more than half your time</span></li>
+                <li><span class="legend-dot dot-yellow"></span><span><strong>Yellow</strong> · getting closer</span></li>
+                <li><span class="legend-dot dot-red"></span><span><strong>Red</strong> · nearly up or overdue</span></li>
+                <li><span class="legend-dot dot-gray"></span><span><strong>Gray</strong> · left for another day</span></li>
+              </ul>
+              <p class="guide-note">Every small step still counts.</p>
+            </section>
+
+            <section class="panel yesterday-panel" id="yesterday-panel" aria-labelledby="yesterday-title" hidden>
+              <p class="eyebrow">A GENTLE LOOK BACK</p>
+              <h2 id="yesterday-title">Yesterday</h2>
+              <div class="yesterday-list" id="yesterday-list"></div>
+            </section>
+          </aside>
+        </div>
+      </main>
+
+      <footer class="page-footer">
+        <span>Progress doesn’t have to be perfect to be real.</span>
+        <span>Saved on this device</span>
+      </footer>
+    </div>
+
+    <dialog class="form-dialog" id="task-dialog" aria-labelledby="task-dialog-title">
+      <form id="task-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">ONE THING AT A TIME</p>
+            <h2 id="task-dialog-title">Add a task</h2>
+          </div>
+          <button class="dialog-close" type="button" data-close-dialog="task-dialog" aria-label="Close">×</button>
+        </div>
+        <label for="task-name">What would you like to do?</label>
+        <input id="task-name" name="name" type="text" maxlength="80" placeholder="e.g. Tidy the kitchen" required />
+        <label for="task-minutes">How much time would you like to give it?</label>
+        <div class="duration-input">
+          <input id="task-minutes" name="minutes" type="number" min="1" max="1440" value="30" required />
+          <span>minutes</span>
+        </div>
+        <label class="checkbox-row" for="save-as-habit">
+          <input id="save-as-habit" name="saveAsHabit" type="checkbox" checked />
+          <span>Save this as a daily habit for another day</span>
+        </label>
+        <p class="form-hint">Your timer starts as soon as you add this task. There’s no need to finish it perfectly.</p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog="task-dialog">Cancel</button>
+          <button class="button button-primary" type="submit">Add to today</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="form-dialog" id="bad-dialog" aria-labelledby="bad-dialog-title">
+      <form id="bad-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">A KINDER ROUTINE</p>
+            <h2 id="bad-dialog-title">Add a habit to change</h2>
+          </div>
+          <button class="dialog-close" type="button" data-close-dialog="bad-dialog" aria-label="Close">×</button>
+        </div>
+        <label for="bad-habit-name">What habit would you like to work on?</label>
+        <input id="bad-habit-name" name="name" type="text" maxlength="80" placeholder="e.g. Scrolling before bed" required />
+        <p class="form-hint">
+          Check in when you avoid it. If an urge comes up, try a short pause and pick a gentle replacement action.
+        </p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog="bad-dialog">Cancel</button>
+          <button class="button button-primary" type="submit">Add habit</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
