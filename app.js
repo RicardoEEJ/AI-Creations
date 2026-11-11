@@ -36,8 +36,40 @@ const taskList = document.querySelector("#task-list");
 const routineList = document.querySelector("#routine-list");
 const badHabitList = document.querySelector("#bad-habit-list");
 const notice = document.querySelector("#storage-notice");
+const saveStatus = document.querySelector("#save-status");
+const accountDialog = document.querySelector("#account-dialog");
+const accountButton = document.querySelector("#account-button");
+const accountForm = document.querySelector("#account-form");
+const accountDetails = document.querySelector("#account-details");
+const authMessage = document.querySelector("#auth-message");
+const accountConfig = window.STEADY_SUPABASE_CONFIG || {};
+const hasSupabaseConfig = Boolean(accountConfig.url || accountConfig.anonKey);
+let supabaseClient = null;
+let supabaseSetupError = null;
+if (hasSupabaseConfig) {
+  if (!accountConfig.url || !accountConfig.anonKey) {
+    supabaseSetupError = "Add both the Supabase project URL and publishable key to supabase-config.js.";
+  } else if (!window.supabase || typeof window.supabase.createClient !== "function") {
+    supabaseSetupError = "The Supabase client could not be loaded. Check your internet connection and reload.";
+  } else {
+    try {
+      supabaseClient = window.supabase.createClient(accountConfig.url, accountConfig.anonKey);
+    } catch (error) {
+      console.error("Could not initialize Supabase.", error);
+      supabaseSetupError = "Supabase settings are invalid. Check supabase-config.js.";
+    }
+  }
+}
 let activePauseId = null;
 let state = loadState();
+let currentUser = null;
+let accountReady = false;
+let authMode = "login";
+let isAccountSessionInitializing = true;
+let pendingAuthUser = null;
+let cloudWriteQueue = Promise.resolve();
+let cloudWriteError = null;
+let saveRevision = 0;
 
 function todayKey(date = new Date()) {
   const year = date.getFullYear();
@@ -68,6 +100,10 @@ function makeDefaultState() {
 function showNotice(message) {
   notice.textContent = message;
   notice.hidden = false;
+}
+
+function setSaveStatus(message) {
+  saveStatus.textContent = message;
 }
 
 function isValidState(value) {
@@ -114,13 +150,50 @@ function loadState() {
 }
 
 function saveState() {
+  if (currentUser) {
+    if (!accountReady) {
+      showNotice("Your account board is still loading. This change has not been saved.");
+      return;
+    }
+    queueCloudSave(currentUser.id);
+    return;
+  }
+
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     notice.hidden = true;
+    setSaveStatus("Saved on this device");
   } catch (error) {
     console.error("Could not save the habit board.", error);
     showNotice("Your browser couldn’t save this change. The board will stay available until you close this page.");
   }
+}
+
+function queueCloudSave(userId) {
+  const revision = ++saveRevision;
+  const snapshot = JSON.parse(JSON.stringify(state));
+  setSaveStatus("Saving to your account…");
+  cloudWriteQueue = cloudWriteQueue.then(async () => {
+    if (currentUser?.id !== userId) {
+      return;
+    }
+    const { error } = await supabaseClient
+      .from("steady_user_data")
+      .upsert({ user_id: userId, board_state: snapshot });
+    if (error) {
+      throw error;
+    }
+    cloudWriteError = null;
+    if (revision === saveRevision) {
+      notice.hidden = true;
+      setSaveStatus("Saved to your account");
+    }
+  }).catch((error) => {
+    cloudWriteError = error;
+    console.error("Could not save the account board.", error);
+    showNotice("Your latest change couldn’t sync to your account. Check your connection and try again.");
+    setSaveStatus("Not synced");
+  });
 }
 
 function escapeText(value) {
@@ -560,6 +633,9 @@ function archiveCurrentDay(newDayKey) {
 }
 
 function checkDayBoundary() {
+  if (currentUser && !accountReady) {
+    return;
+  }
   const currentDay = todayKey();
   if (state.dayKey !== currentDay) {
     archiveCurrentDay(currentDay);
@@ -606,6 +682,207 @@ function openDialog(dialog) {
     showNotice("This browser does not support the add-task dialog. Please try a current browser.");
   }
 }
+
+function renderAccountControls() {
+  const signedIn = Boolean(currentUser);
+  accountButton.textContent = signedIn ? "Account" : "Log in";
+  accountForm.hidden = signedIn;
+  accountDetails.hidden = !signedIn;
+  document.querySelector("#account-email-label").textContent = currentUser?.email || "";
+  document.querySelector("#auth-submit").textContent = authMode === "login" ? "Log in" : "Create account";
+  document.querySelector("#auth-mode-toggle").textContent =
+    authMode === "login" ? "Create an account" : "I already have an account";
+  document.querySelector("#account-password").autocomplete =
+    authMode === "login" ? "current-password" : "new-password";
+}
+
+function showAuthMessage(message) {
+  authMessage.textContent = message;
+  authMessage.hidden = false;
+}
+
+function hasBoardData(boardState) {
+  return boardState.tasks.length > 0 ||
+    boardState.habits.length > 0 ||
+    boardState.badHabits.length > 0 ||
+    boardState.history.length > 0;
+}
+
+async function activateAccount(user) {
+  if (!user) {
+    if (!currentUser) {
+      return;
+    }
+    currentUser = null;
+    accountReady = true;
+    cloudWriteError = null;
+    state = loadState();
+    document.querySelector("main").inert = false;
+    setSaveStatus("Saved on this device");
+    renderAccountControls();
+    render();
+    return;
+  }
+  if (currentUser?.id === user.id && accountReady) {
+    return;
+  }
+
+  currentUser = user;
+  accountReady = false;
+  document.querySelector("main").inert = true;
+  renderAccountControls();
+  setSaveStatus("Loading your account…");
+  showNotice("Loading your saved board…");
+  try {
+    const { data, error } = await supabaseClient
+      .from("steady_user_data")
+      .select("board_state")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error) {
+      throw error;
+    }
+
+    if (data) {
+      if (!isValidState(data.board_state)) {
+        throw new Error("The account board has an unsupported data format.");
+      }
+      state = data.board_state;
+    } else {
+      const localState = loadState();
+      const copyLocalBoard = hasBoardData(localState) && window.confirm(
+        "This account has no saved board yet. Copy this device’s current tasks and habits to the account? Choose Cancel to keep them only on this device."
+      );
+      state = copyLocalBoard ? localState : makeDefaultState();
+    }
+
+    accountReady = true;
+    document.querySelector("main").inert = false;
+    render();
+    if (data) {
+      notice.hidden = true;
+      setSaveStatus("Saved to your account");
+    } else if (hasBoardData(state)) {
+      saveState();
+      await cloudWriteQueue;
+    } else {
+      notice.hidden = true;
+      setSaveStatus("Saved to your account");
+    }
+  } catch (error) {
+    console.error("Could not load the account board.", error);
+    showNotice("Your account board couldn’t be loaded. The board is locked to prevent overwriting your saved data. Check your connection, then reload.");
+    setSaveStatus("Account unavailable");
+  }
+  renderAccountControls();
+}
+
+async function initializeAccount() {
+  if (!supabaseClient) {
+    return;
+  }
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    const user = session?.user || null;
+    if (isAccountSessionInitializing) {
+      pendingAuthUser = user;
+      return;
+    }
+    if (user?.id === currentUser?.id) {
+      return;
+    }
+    window.setTimeout(() => {
+      void activateAccount(user);
+    }, 0);
+  });
+  try {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) {
+      throw error;
+    }
+    const user = data.session?.user || pendingAuthUser;
+    if (user) {
+      await activateAccount(user);
+    }
+  } catch (error) {
+    console.error("Could not check the account session.", error);
+    showNotice("Your account session couldn’t be checked. Your saved board has not been changed.");
+    if (pendingAuthUser) {
+      await activateAccount(pendingAuthUser);
+    }
+  } finally {
+    isAccountSessionInitializing = false;
+  }
+}
+
+accountButton.addEventListener("click", () => {
+  if (!supabaseClient) {
+    showNotice(supabaseSetupError ||
+      "Account saving is not configured yet. Follow the Supabase setup instructions to enable sign-in.");
+    return;
+  }
+  renderAccountControls();
+  if (typeof accountDialog.showModal === "function") {
+    accountDialog.showModal();
+  } else {
+    showNotice("This browser does not support the account dialog. Please try a current browser.");
+  }
+});
+
+document.querySelector("#auth-mode-toggle").addEventListener("click", () => {
+  authMode = authMode === "login" ? "signup" : "login";
+  authMessage.hidden = true;
+  renderAccountControls();
+});
+
+accountForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!supabaseClient) {
+    showAuthMessage(supabaseSetupError || "Account saving is not configured yet.");
+    return;
+  }
+  const email = accountForm.elements.email.value.trim();
+  const password = accountForm.elements.password.value;
+  const submitButton = document.querySelector("#auth-submit");
+  submitButton.disabled = true;
+  authMessage.hidden = true;
+  try {
+    const result = authMode === "login"
+      ? await supabaseClient.auth.signInWithPassword({ email, password })
+      : await supabaseClient.auth.signUp({ email, password });
+    if (result.error) {
+      throw result.error;
+    }
+    if (authMode === "signup" && !result.data.session) {
+      showAuthMessage("Check your email for a confirmation link, then return here to log in.");
+      return;
+    }
+    accountDialog.close();
+  } catch (error) {
+    console.error("Account authentication failed.", error);
+    showAuthMessage(error.message || "We couldn’t complete that account request. Please try again.");
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
+document.querySelector("#sign-out").addEventListener("click", async () => {
+  await cloudWriteQueue;
+  if (cloudWriteError && !window.confirm(
+    "Your latest board changes may not have synced. Log out anyway?"
+  )) {
+    return;
+  }
+  try {
+    const { error } = await supabaseClient.auth.signOut();
+    if (error) {
+      throw error;
+    }
+    accountDialog.close();
+  } catch (error) {
+    console.error("Could not sign out.", error);
+    showNotice("You couldn’t be signed out. Please try again.");
+  }
+});
 
 document.querySelector("#open-task-dialog").addEventListener("click", () => openDialog(taskDialog));
 document.querySelector("#empty-add-task").addEventListener("click", () => openDialog(taskDialog));
@@ -668,7 +945,13 @@ document.addEventListener("pointerover", (event) => {
 });
 
 document.querySelector("#quote-text").textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
-checkDayBoundary();
-render();
+renderAccountControls();
+void initializeAccount().then(() => {
+  if (currentUser && !accountReady) {
+    return;
+  }
+  checkDayBoundary();
+  render();
+});
 window.setInterval(updateLiveTimers, 1000);
 window.setInterval(checkDayBoundary, 15000);

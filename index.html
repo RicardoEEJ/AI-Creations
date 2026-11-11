@@ -9,6 +9,8 @@
     />
     <title>Steady — one step at a time</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" defer></script>
+    <script src="supabase-config.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -26,6 +28,7 @@
         </a>
         <div class="topbar-actions">
           <span class="today-label" id="today-label"></span>
+          <button class="sound-toggle" id="account-button" type="button">Log in</button>
           <button class="sound-toggle" id="sound-toggle" type="button" aria-pressed="false">
             <span aria-hidden="true" id="sound-icon">♪</span>
             <span id="sound-label">Sound off</span>
@@ -162,7 +165,7 @@
 
       <footer class="page-footer">
         <span>Progress doesn’t have to be perfect to be real.</span>
-        <span>Saved on this device</span>
+        <span id="save-status">Saved on this device</span>
       </footer>
     </div>
 
@@ -213,6 +216,39 @@
           <button class="button button-primary" type="submit">Add habit</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog class="form-dialog" id="account-dialog" aria-labelledby="account-dialog-title">
+      <div class="account-content">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">YOUR BOARD, YOURS</p>
+            <h2 id="account-dialog-title">Your account</h2>
+          </div>
+          <button class="dialog-close" type="button" data-close-dialog="account-dialog" aria-label="Close">×</button>
+        </div>
+        <form id="account-form">
+          <p class="form-hint account-intro">
+            Sign in to save your tasks and habits to your account and access them on another device.
+          </p>
+          <label for="account-email">Email</label>
+          <input id="account-email" name="email" type="email" autocomplete="email" required />
+          <label for="account-password">Password</label>
+          <input id="account-password" name="password" type="password" minlength="6" autocomplete="current-password" required />
+          <p class="form-hint" id="auth-message" role="status" hidden></p>
+          <div class="dialog-actions account-actions">
+            <button class="button button-secondary" id="auth-mode-toggle" type="button">Create an account</button>
+            <button class="button button-primary" id="auth-submit" type="submit">Log in</button>
+          </div>
+        </form>
+        <div id="account-details" hidden>
+          <p class="form-hint">Signed in as <strong id="account-email-label"></strong>.</p>
+          <p class="form-hint">Your board data is saved to your account. Sign out to return to this device’s local board.</p>
+          <div class="dialog-actions">
+            <button class="button button-secondary" id="sign-out" type="button">Log out</button>
+          </div>
+        </div>
+      </div>
     </dialog>
   </body>
 </html>

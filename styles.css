@@ -1086,7 +1086,9 @@ h1 span {
 }
 
 .form-dialog input[type="text"],
-.form-dialog input[type="number"] {
+.form-dialog input[type="number"],
+.form-dialog input[type="email"],
+.form-dialog input[type="password"] {
   width: 100%;
   height: 42px;
   padding: 0 12px;
@@ -1144,6 +1146,28 @@ h1 span {
   justify-content: flex-end;
   gap: 9px;
   margin-top: 22px;
+}
+
+.account-content > .dialog-heading {
+  margin: 0;
+  padding: 24px 24px 18px;
+}
+
+.account-content form,
+#account-details {
+  padding: 0 24px 24px;
+}
+
+.account-intro {
+  margin-top: 0;
+}
+
+.account-actions {
+  flex-wrap: wrap;
+}
+
+.account-actions .button {
+  flex: 1 1 auto;
 }
 
 [hidden] {
