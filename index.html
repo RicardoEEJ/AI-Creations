@@ -127,7 +127,7 @@
                 <span class="habit-symbol" aria-hidden="true">↗</span>
                 <div>
                   <p class="eyebrow">GENTLE RESET</p>
-                  <h2 id="habit-title">Habits to let go</h2>
+                  <h2 id="habit-title">Habits to Let Go</h2>
                 </div>
               </div>
               <p class="section-description">
@@ -185,11 +185,13 @@
           <input id="task-minutes" name="minutes" type="number" min="1" max="1440" value="30" required />
           <span>minutes</span>
         </div>
-        <label class="checkbox-row" for="save-as-habit">
+        <label for="task-start-at">When should it start? (optional)</label>
+        <input id="task-start-at" name="startAt" type="datetime-local" step="1" />
+        <label class="checkbox-row" id="save-as-habit-row" for="save-as-habit">
           <input id="save-as-habit" name="saveAsHabit" type="checkbox" checked />
           <span>Save this as a daily habit for another day</span>
         </label>
-        <p class="form-hint">Your timer starts as soon as you add this task. There’s no need to finish it perfectly.</p>
+        <p class="form-hint">Without a start time, your timer begins as soon as you add the task. Scheduled tasks begin when their time arrives.</p>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-close-dialog="task-dialog">Cancel</button>
           <button class="button button-primary" type="submit">Add to today</button>
@@ -244,6 +246,33 @@
         <div id="account-details" hidden>
           <p class="form-hint">Signed in as <strong id="account-email-label"></strong>.</p>
           <p class="form-hint">Your board data is saved to your account. Sign out to return to this device’s local board.</p>
+          <section class="account-password-section" aria-labelledby="password-change-title">
+            <button class="button button-secondary" id="open-password-change" type="button">Change password</button>
+            <form id="change-password-form" hidden>
+              <h3 id="password-change-title">Change password</h3>
+              <p class="form-hint password-policy">Use at least 12 characters. Your current password will be verified securely by Supabase Auth.</p>
+              <label for="current-password">Current password</label>
+              <div class="password-input-wrap">
+                <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required />
+                <button class="password-visibility" type="button" data-password-toggle="current-password" aria-label="Show current password" aria-pressed="false">Show</button>
+              </div>
+              <label for="new-password">New password</label>
+              <div class="password-input-wrap">
+                <input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" required />
+                <button class="password-visibility" type="button" data-password-toggle="new-password" aria-label="Show new password" aria-pressed="false">Show</button>
+              </div>
+              <label for="confirm-password">Confirm new password</label>
+              <div class="password-input-wrap">
+                <input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required />
+                <button class="password-visibility" type="button" data-password-toggle="confirm-password" aria-label="Show password confirmation" aria-pressed="false">Show</button>
+              </div>
+              <p class="form-hint" id="password-change-message" role="status" hidden></p>
+              <div class="dialog-actions">
+                <button class="button button-secondary" id="cancel-password-change" type="button">Cancel</button>
+                <button class="button button-primary" type="submit">Update password</button>
+              </div>
+            </form>
+          </section>
           <div class="dialog-actions">
             <button class="button button-secondary" id="sign-out" type="button">Log out</button>
           </div>

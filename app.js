@@ -41,7 +41,9 @@ const accountDialog = document.querySelector("#account-dialog");
 const accountButton = document.querySelector("#account-button");
 const accountForm = document.querySelector("#account-form");
 const accountDetails = document.querySelector("#account-details");
+const changePasswordForm = document.querySelector("#change-password-form");
 const authMessage = document.querySelector("#auth-message");
+const passwordChangeMessage = document.querySelector("#password-change-message");
 const accountConfig = window.STEADY_SUPABASE_CONFIG || {};
 const hasSupabaseConfig = Boolean(accountConfig.url || accountConfig.anonKey);
 let supabaseClient = null;
@@ -61,6 +63,11 @@ if (hasSupabaseConfig) {
   }
 }
 let activePauseId = null;
+let editingTaskId = null;
+let editingBadHabitId = null;
+let audioContext = null;
+let activeOscillators = [];
+let audioUnavailableNotified = false;
 let state = loadState();
 let currentUser = null;
 let accountReady = false;
@@ -87,13 +94,13 @@ function createId() {
 
 function makeDefaultState() {
   return {
-    version: 1,
+    version: 2,
     dayKey: todayKey(),
     tasks: [],
     habits: [],
     badHabits: [],
     history: [],
-    soundOn: false,
+    soundOn: true,
   };
 }
 
@@ -109,7 +116,7 @@ function setSaveStatus(message) {
 function isValidState(value) {
   return (
     value &&
-    value.version === 1 &&
+    value.version === 2 &&
     typeof value.dayKey === "string" &&
     Array.isArray(value.tasks) &&
     Array.isArray(value.habits) &&
@@ -117,6 +124,50 @@ function isValidState(value) {
     Array.isArray(value.history) &&
     typeof value.soundOn === "boolean"
   );
+}
+
+function migrateState(value) {
+  if (
+    !value ||
+    (value.version !== 1 && value.version !== 2) ||
+    typeof value.dayKey !== "string" ||
+    !Array.isArray(value.tasks) ||
+    !Array.isArray(value.habits) ||
+    !Array.isArray(value.badHabits) ||
+    !Array.isArray(value.history) ||
+    typeof value.soundOn !== "boolean"
+  ) {
+    return null;
+  }
+  if (value.version === 2) {
+    return value;
+  }
+
+  return {
+    ...value,
+    version: 2,
+    tasks: value.tasks.map((task) => ({
+      ...task,
+      scheduledAt: Number.isFinite(task.scheduledAt) ? task.scheduledAt : null,
+    })),
+    badHabits: value.badHabits.map((habit) => ({
+      ...habit,
+      checkedIn: Boolean(habit.avoided),
+    })),
+    history: value.history.map((day) => ({
+      ...day,
+      badHabits: (Array.isArray(day.badHabits) ? day.badHabits : []).map((habit) => {
+        const currentHabit = value.badHabits.find(
+          (item) => item.name.toLocaleLowerCase() === String(habit.name).toLocaleLowerCase()
+        );
+        return {
+          ...habit,
+          id: habit.id || currentHabit?.id || null,
+          checkedIn: Boolean(habit.avoided),
+        };
+      }),
+    })),
+  };
 }
 
 function loadState() {
@@ -142,11 +193,20 @@ function loadState() {
     return makeDefaultState();
   }
 
-  if (!isValidState(parsed)) {
+  const migrated = migrateState(parsed);
+  if (!migrated || !isValidState(migrated)) {
     showNotice("Saved data is from an unsupported version. A fresh board is open.");
     return makeDefaultState();
   }
-  return parsed;
+  if (migrated !== parsed) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+    } catch (error) {
+      console.error("Could not upgrade the saved habit board.", error);
+      showNotice("Your board was upgraded for this session, but the updated format couldn’t be saved.");
+    }
+  }
+  return migrated;
 }
 
 function saveState() {
@@ -226,10 +286,10 @@ function taskColor(task, now = Date.now()) {
   if (task.status === "done") {
     return task.outcome || "gray";
   }
-  if (task.status === "missed") {
+  if (task.status === "missed" || task.status === "scheduled") {
     return "gray";
   }
-  const remaining = task.createdAt + task.durationMs - now;
+  const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - now;
   const ratio = remaining / task.durationMs;
   if (ratio > 0.5) {
     return "green";
@@ -249,7 +309,7 @@ function taskMessage(color) {
   return messages[Math.floor(Math.random() * messages.length)];
 }
 
-function createTask({ name, minutes, habitId = null, saveAsHabit = false }) {
+function createTask({ name, minutes, habitId = null, saveAsHabit = false, scheduledAt = null }) {
   const now = Date.now();
   let linkedHabitId = habitId;
   if (saveAsHabit) {
@@ -270,11 +330,29 @@ function createTask({ name, minutes, habitId = null, saveAsHabit = false }) {
     minutes,
     durationMs: minutes * 60 * 1000,
     createdAt: now,
-    status: "active",
+    scheduledAt,
+    status: scheduledAt > now ? "scheduled" : "active",
     outcome: null,
     completedAt: null,
     habitId: linkedHabitId,
   });
+  saveState();
+  render();
+  void playSound("task-added");
+}
+
+function updateTask(taskId, { name, minutes, scheduledAt }) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    return;
+  }
+  task.name = name;
+  task.minutes = minutes;
+  task.durationMs = minutes * 60 * 1000;
+  task.scheduledAt = scheduledAt;
+  if (task.status === "scheduled" || task.status === "active") {
+    task.status = scheduledAt > Date.now() ? "scheduled" : "active";
+  }
   saveState();
   render();
 }
@@ -289,7 +367,7 @@ function finishTask(taskId) {
   task.completedAt = Date.now();
   saveState();
   render();
-  playChime();
+  void playSound("task-completed");
 }
 
 function removeTask(taskId) {
@@ -309,7 +387,18 @@ function startRoutine(habit) {
 }
 
 function addBadHabit(name) {
-  state.badHabits.push({ id: createId(), name, avoided: false });
+  state.badHabits.push({ id: createId(), name, avoided: false, checkedIn: false });
+  saveState();
+  render();
+  void playSound("habit-added");
+}
+
+function updateBadHabit(habitId, name) {
+  const habit = state.badHabits.find((item) => item.id === habitId);
+  if (!habit) {
+    return;
+  }
+  habit.name = name;
   saveState();
   render();
 }
@@ -320,11 +409,49 @@ function toggleAvoided(habitId) {
     return;
   }
   habit.avoided = !habit.avoided;
+  habit.checkedIn = habit.avoided;
   saveState();
   render();
   if (habit.avoided) {
-    playChime();
+    void playSound("habit-avoided");
   }
+}
+
+function toggleHardDay(habitId) {
+  const habit = state.badHabits.find((item) => item.id === habitId);
+  if (!habit) {
+    return;
+  }
+  const isUndo = habit.checkedIn && !habit.avoided;
+  habit.checkedIn = !isUndo;
+  habit.avoided = false;
+  saveState();
+  render();
+}
+
+function getHabitHistory(habit) {
+  const historyByDay = new Map(
+    state.history.map((day) => [
+      day.dayKey,
+      (day.badHabits || []).find((item) => item.id === habit.id),
+    ])
+  );
+  const days = [];
+  for (let daysAgo = 29; daysAgo >= 0; daysAgo -= 1) {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(date.getDate() - daysAgo);
+    const dayKey = todayKey(date);
+    const entry = dayKey === state.dayKey ? habit : historyByDay.get(dayKey);
+    const status = !entry || !entry.checkedIn
+      ? "open"
+      : entry.avoided ? "avoided" : "hard";
+    days.push({
+      date,
+      status,
+    });
+  }
+  return days;
 }
 
 function removeBadHabit(habitId) {
@@ -339,7 +466,8 @@ function removeBadHabit(habitId) {
 function buildTaskCard(task) {
   const color = taskColor(task);
   const active = task.status === "active";
-  const remaining = task.createdAt + task.durationMs - Date.now();
+  const scheduled = task.status === "scheduled";
+  const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - Date.now();
   const remainingRatio = active ? Math.min(1, Math.max(0, remaining / task.durationMs)) : 0;
   const card = makeElement(
     "article",
@@ -358,7 +486,12 @@ function buildTaskCard(task) {
   const meta = makeElement("div", "task-meta");
   const timer = makeElement("span", "task-timer");
   timer.dataset.timerFor = task.id;
-  if (active) {
+  if (scheduled) {
+    timer.textContent = `Starts ${new Date(task.scheduledAt).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    })}`;
+  } else if (active) {
     timer.textContent = remaining > 0 ? `${formatDuration(remaining)} left` : `${formatDuration(-remaining)} overdue`;
   } else if (task.status === "done") {
     timer.textContent = `Finished in ${colorLabel(color).toLowerCase()} time`;
@@ -371,9 +504,11 @@ function buildTaskCard(task) {
   badge.dataset.statusFor = task.id;
   badge.dataset.tooltip = taskMessage(color);
   badge.tabIndex = 0;
-  badge.textContent = active
-    ? remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`
-    : task.status === "done" ? `Done · ${colorLabel(color)}` : "Missed · Gray";
+  badge.textContent = scheduled
+    ? "Scheduled"
+    : active
+      ? remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`
+      : task.status === "done" ? `Done · ${colorLabel(color)}` : "Missed · Gray";
   badge.setAttribute("aria-label", `${badge.textContent}. ${badge.dataset.tooltip}`);
   meta.append(badge);
   main.append(meta);
@@ -388,7 +523,9 @@ function buildTaskCard(task) {
   fill.dataset.progressFor = task.id;
   fill.style.width = `${remainingRatio * 100}%`;
   progress.append(fill);
-  main.append(progress);
+  if (!scheduled) {
+    main.append(progress);
+  }
   card.append(main);
 
   const actions = makeElement("div", "task-actions");
@@ -399,6 +536,12 @@ function buildTaskCard(task) {
     done.addEventListener("click", () => finishTask(task.id));
     actions.append(done);
   }
+  const edit = makeElement("button", "icon-button", "✎");
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${task.name}`);
+  edit.addEventListener("click", () => openTaskEditor(task.id));
+  actions.append(edit);
+
   const remove = makeElement("button", "icon-button", "×");
   remove.type = "button";
   remove.setAttribute("aria-label", `Remove ${task.name}`);
@@ -419,7 +562,9 @@ function buildRoutineItem(habit) {
   const button = makeElement("button", todayTask ? "button button-secondary" : "button button-primary");
   button.type = "button";
   if (todayTask) {
-    button.textContent = todayTask.status === "done" ? "Done today" : "In progress";
+    button.textContent = todayTask.status === "done"
+      ? "Done today"
+      : todayTask.status === "scheduled" ? "Scheduled" : "In progress";
     button.disabled = true;
   } else {
     button.textContent = "Start today";
@@ -435,13 +580,20 @@ function buildBadHabitItem(habit) {
   const top = makeElement("div", "bad-habit-top");
   const info = makeElement("div");
   info.append(makeElement("p", "bad-habit-name", habit.name));
-  const status = makeElement(
-    "span",
-    `bad-habit-status${habit.avoided ? " is-resisted" : ""}`,
-    habit.avoided ? "Avoided today · Green" : "Your check-in is open"
-  );
+  const statusLabel = habit.avoided
+    ? "Avoided today · Green"
+    : habit.checkedIn
+      ? "Thanks for checking in · Tomorrow is another chance"
+      : "Your check-in is open";
+  const status = makeElement("span", `bad-habit-status${habit.avoided ? " is-resisted" : ""}`, statusLabel);
   info.append(status);
   top.append(info);
+
+  const edit = makeElement("button", "icon-button", "✎");
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${habit.name}`);
+  edit.addEventListener("click", () => openBadHabitEditor(habit.id));
+  top.append(edit);
 
   const remove = makeElement("button", "icon-button", "×");
   remove.type = "button";
@@ -461,6 +613,16 @@ function buildBadHabitItem(habit) {
   checkIn.addEventListener("click", () => toggleAvoided(habit.id));
   buttons.append(checkIn);
 
+  const hardDay = makeElement(
+    "button",
+    "urge-button",
+    habit.checkedIn && !habit.avoided ? "Undo check-in" : "Today was hard"
+  );
+  hardDay.type = "button";
+  hardDay.setAttribute("aria-pressed", String(habit.checkedIn && !habit.avoided));
+  hardDay.addEventListener("click", () => toggleHardDay(habit.id));
+  buttons.append(hardDay);
+
   const urge = makeElement("button", "urge-button", activePauseId === habit.id ? "Close pause" : "I feel an urge");
   urge.type = "button";
   urge.setAttribute("aria-expanded", String(activePauseId === habit.id));
@@ -470,6 +632,33 @@ function buildBadHabitItem(habit) {
   });
   buttons.append(urge);
   item.append(buttons);
+
+  const history = getHabitHistory(habit);
+  const avoidedDays = history.filter((day) => day.status === "avoided").length;
+  const checkedDays = history.filter((day) => day.status !== "open").length;
+  const progress = makeElement("div", "habit-progress");
+  progress.append(makeElement(
+    "p",
+    "habit-progress-summary",
+    `${avoidedDays} steady ${avoidedDays === 1 ? "day" : "days"} · ${checkedDays} ${checkedDays === 1 ? "check-in" : "check-ins"} in 30 days`
+  ));
+  const dayStrip = makeElement("div", "habit-day-strip");
+  dayStrip.setAttribute("role", "img");
+  dayStrip.setAttribute("aria-label", `${avoidedDays} avoided days out of ${checkedDays} check-ins in the last 30 days`);
+  for (const day of history) {
+    const dot = makeElement("span", `habit-day is-${day.status}`);
+    const dayLabel = day.date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    const dayStatus = day.status === "avoided"
+      ? "avoided"
+      : day.status === "hard" ? "checked in, ready to try again" : "no check-in";
+    dot.title = `${dayLabel}: ${dayStatus}`;
+    dayStrip.append(dot);
+  }
+  progress.append(dayStrip);
+  item.append(progress);
 
   if (activePauseId === habit.id) {
     const pause = makeElement("div", "pause-card");
@@ -520,10 +709,13 @@ function renderYesterday() {
     };
   });
   for (const habit of previousDay.badHabits || []) {
+    const color = habit.avoided ? "green" : "gray";
     previousItems.push({
       name: habit.name,
-      color: habit.avoided ? "green" : "gray",
-      label: habit.avoided ? "Avoided · Green" : "No check-in · Gray",
+      color,
+      label: habit.avoided
+        ? "Avoided · Green"
+        : habit.checkedIn ? "Checked in · A new chance tomorrow" : "No check-in · Gray",
     });
   }
   for (const item of previousItems.slice(0, 5)) {
@@ -580,7 +772,7 @@ function updateLiveTimers() {
     if (task.status !== "active") {
       continue;
     }
-    const remaining = task.createdAt + task.durationMs - Date.now();
+    const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - Date.now();
     const color = taskColor(task);
     const card = document.querySelector(`#task-${CSS.escape(task.id)}`);
     if (!card) {
@@ -606,15 +798,24 @@ function updateLiveTimers() {
 }
 
 function archiveCurrentDay(newDayKey) {
-  const previousTasks = state.tasks.map((task) =>
+  const now = Date.now();
+  const carriedTasks = state.tasks.filter((task) =>
+    task.status === "scheduled" &&
+    (task.scheduledAt > now || todayKey(new Date(task.scheduledAt)) === newDayKey)
+  ).map((task) => Object.assign({}, task, {
+    status: task.scheduledAt <= now ? "active" : task.status,
+  }));
+  const previousTasks = state.tasks.filter((task) => !carriedTasks.some((carried) => carried.id === task.id)).map((task) =>
     Object.assign({}, task, {
-      status: task.status === "active" ? "missed" : task.status,
-      outcome: task.status === "active" ? "gray" : task.outcome,
+      status: task.status === "active" || task.status === "scheduled" ? "missed" : task.status,
+      outcome: task.status === "active" || task.status === "scheduled" ? "gray" : task.outcome,
     })
   );
   const previousBadHabits = state.badHabits.map((habit) => ({
+    id: habit.id,
     name: habit.name,
     avoided: habit.avoided,
+    checkedIn: habit.checkedIn,
   }));
   if (previousTasks.length > 0 || previousBadHabits.length > 0) {
     state.history.unshift({
@@ -622,11 +823,14 @@ function archiveCurrentDay(newDayKey) {
       tasks: previousTasks,
       badHabits: previousBadHabits,
     });
-    state.history = state.history.slice(0, 7);
+    state.history = state.history.slice(0, 30);
   }
   state.dayKey = newDayKey;
-  state.tasks = [];
-  state.badHabits = state.badHabits.map((habit) => Object.assign({}, habit, { avoided: false }));
+  state.tasks = carriedTasks;
+  state.badHabits = state.badHabits.map((habit) => Object.assign({}, habit, {
+    avoided: false,
+    checkedIn: false,
+  }));
   activePauseId = null;
   saveState();
   render();
@@ -642,36 +846,96 @@ function checkDayBoundary() {
   }
 }
 
-function playChime() {
+function activateDueTasks() {
+  const now = Date.now();
+  let changed = false;
+  for (const task of state.tasks) {
+    if (task.status === "scheduled" && task.scheduledAt <= now) {
+      task.status = "active";
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveState();
+    render();
+  }
+}
+
+async function playSound(kind) {
   if (!state.soundOn) {
     return;
   }
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
-    showNotice("This browser does not support the optional success sound.");
+    if (!audioUnavailableNotified) {
+      showNotice("This browser does not support the optional sounds.");
+      audioUnavailableNotified = true;
+    }
     return;
   }
+
+  const sequences = {
+    "task-added": [{ frequency: 587.33, offset: 0, duration: 0.13, volume: 0.018 }],
+    "habit-added": [
+      { frequency: 523.25, offset: 0, duration: 0.14, volume: 0.018 },
+      { frequency: 659.25, offset: 0.08, duration: 0.16, volume: 0.018 },
+    ],
+    "task-completed": [
+      { frequency: 523.25, offset: 0, duration: 0.2, volume: 0.034 },
+      { frequency: 659.25, offset: 0.1, duration: 0.22, volume: 0.034 },
+      { frequency: 783.99, offset: 0.2, duration: 0.25, volume: 0.034 },
+      { frequency: 1046.5, offset: 0.3, duration: 0.34, volume: 0.034 },
+    ],
+    "habit-avoided": [
+      { frequency: 659.25, offset: 0, duration: 0.2, volume: 0.03 },
+      { frequency: 783.99, offset: 0.11, duration: 0.24, volume: 0.03 },
+      { frequency: 987.77, offset: 0.22, duration: 0.28, volume: 0.03 },
+    ],
+  };
+  const sequence = sequences[kind];
+  if (!sequence) {
+    return;
+  }
+
   try {
-    const context = new AudioContextClass();
-    const now = context.currentTime;
-    [659.25, 783.99].forEach((frequency, index) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      const start = now + index * 0.11;
+    if (!audioContext) {
+      audioContext = new AudioContextClass();
+    }
+    if (audioContext.state === "suspended") {
+      await audioContext.resume();
+    }
+    if (!state.soundOn) {
+      return;
+    }
+    for (const oscillator of activeOscillators) {
+      oscillator.stop();
+    }
+    activeOscillators = [];
+    const now = audioContext.currentTime;
+    for (const note of sequence) {
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const start = now + note.offset;
       oscillator.type = "sine";
-      oscillator.frequency.value = frequency;
+      oscillator.frequency.value = note.frequency;
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.045, start + 0.025);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.2);
+      gain.gain.exponentialRampToValueAtTime(note.volume, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + note.duration);
       oscillator.connect(gain);
-      gain.connect(context.destination);
+      gain.connect(audioContext.destination);
+      activeOscillators.push(oscillator);
+      oscillator.addEventListener("ended", () => {
+        activeOscillators = activeOscillators.filter((item) => item !== oscillator);
+      }, { once: true });
       oscillator.start(start);
-      oscillator.stop(start + 0.21);
-    });
-    window.setTimeout(() => context.close(), 550);
+      oscillator.stop(start + note.duration + 0.01);
+    }
   } catch (error) {
-    console.error("The optional success sound could not be played.", error);
-    showNotice("The optional success sound couldn’t be played in this browser.");
+    console.error("The optional interaction sound could not be played.", error);
+    if (!audioUnavailableNotified) {
+      showNotice("The optional sound couldn’t be played in this browser.");
+      audioUnavailableNotified = true;
+    }
   }
 }
 
@@ -681,6 +945,68 @@ function openDialog(dialog) {
   } else {
     showNotice("This browser does not support the add-task dialog. Please try a current browser.");
   }
+}
+
+function openNewTaskDialog() {
+  editingTaskId = null;
+  const form = document.querySelector("#task-form");
+  form.reset();
+  document.querySelector("#task-dialog-title").textContent = "Add a task";
+  form.querySelector('[type="submit"]').textContent = "Add to today";
+  document.querySelector("#save-as-habit-row").hidden = false;
+  openDialog(taskDialog);
+}
+
+function openTaskEditor(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    return;
+  }
+  editingTaskId = taskId;
+  const form = document.querySelector("#task-form");
+  form.elements.name.value = task.name;
+  form.elements.minutes.value = String(task.minutes);
+  form.elements.startAt.value = task.scheduledAt ? toLocalDateTimeInput(task.scheduledAt) : "";
+  document.querySelector("#task-dialog-title").textContent = "Edit task";
+  form.querySelector('[type="submit"]').textContent = "Save changes";
+  document.querySelector("#save-as-habit-row").hidden = true;
+  openDialog(taskDialog);
+}
+
+function toLocalDateTimeInput(timestamp) {
+  const date = new Date(timestamp);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 19);
+}
+
+function parseLocalDateTime(value) {
+  if (!value) {
+    return null;
+  }
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function openNewBadHabitDialog() {
+  editingBadHabitId = null;
+  const form = document.querySelector("#bad-form");
+  form.reset();
+  document.querySelector("#bad-dialog-title").textContent = "Add a habit to change";
+  form.querySelector('[type="submit"]').textContent = "Add habit";
+  openDialog(badDialog);
+}
+
+function openBadHabitEditor(habitId) {
+  const habit = state.badHabits.find((item) => item.id === habitId);
+  if (!habit) {
+    return;
+  }
+  editingBadHabitId = habitId;
+  const form = document.querySelector("#bad-form");
+  form.elements.name.value = habit.name;
+  document.querySelector("#bad-dialog-title").textContent = "Edit habit";
+  form.querySelector('[type="submit"]').textContent = "Save changes";
+  openDialog(badDialog);
 }
 
 function renderAccountControls() {
@@ -699,6 +1025,21 @@ function renderAccountControls() {
 function showAuthMessage(message) {
   authMessage.textContent = message;
   authMessage.hidden = false;
+}
+
+function showPasswordChangeMessage(message) {
+  passwordChangeMessage.textContent = message;
+  passwordChangeMessage.hidden = false;
+}
+
+function resetPasswordVisibility() {
+  document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+    const input = document.getElementById(button.dataset.passwordToggle);
+    input.type = "password";
+    button.textContent = "Show";
+    button.setAttribute("aria-label", `Show ${input.labels[0].textContent.trim().toLowerCase()}`);
+    button.setAttribute("aria-pressed", "false");
+  });
 }
 
 function hasBoardData(boardState) {
@@ -743,11 +1084,14 @@ async function activateAccount(user) {
       throw error;
     }
 
+    let cloudStateNeedsUpgrade = false;
     if (data) {
-      if (!isValidState(data.board_state)) {
+      const accountBoard = migrateState(data.board_state);
+      if (!accountBoard || !isValidState(accountBoard)) {
         throw new Error("The account board has an unsupported data format.");
       }
-      state = data.board_state;
+      state = accountBoard;
+      cloudStateNeedsUpgrade = accountBoard !== data.board_state;
     } else {
       const localState = loadState();
       const copyLocalBoard = hasBoardData(localState) && window.confirm(
@@ -760,8 +1104,13 @@ async function activateAccount(user) {
     document.querySelector("main").inert = false;
     render();
     if (data) {
-      notice.hidden = true;
-      setSaveStatus("Saved to your account");
+      if (cloudStateNeedsUpgrade) {
+        saveState();
+        await cloudWriteQueue;
+      } else {
+        notice.hidden = true;
+        setSaveStatus("Saved to your account");
+      }
     } else if (hasBoardData(state)) {
       saveState();
       await cloudWriteQueue;
@@ -834,6 +1183,89 @@ document.querySelector("#auth-mode-toggle").addEventListener("click", () => {
   renderAccountControls();
 });
 
+document.querySelector("#open-password-change").addEventListener("click", () => {
+  changePasswordForm.reset();
+  passwordChangeMessage.hidden = true;
+  changePasswordForm.hidden = false;
+  document.querySelector("#open-password-change").hidden = true;
+  resetPasswordVisibility();
+  document.querySelector("#current-password").focus();
+});
+
+document.querySelector("#cancel-password-change").addEventListener("click", () => {
+  changePasswordForm.reset();
+  changePasswordForm.hidden = true;
+  passwordChangeMessage.hidden = true;
+  document.querySelector("#open-password-change").hidden = false;
+  resetPasswordVisibility();
+});
+
+document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = document.getElementById(button.dataset.passwordToggle);
+    const visible = input.type === "password";
+    input.type = visible ? "text" : "password";
+    button.textContent = visible ? "Hide" : "Show";
+    const label = input.labels[0].textContent.trim().toLowerCase();
+    button.setAttribute("aria-label", `${visible ? "Hide" : "Show"} ${label}`);
+    button.setAttribute("aria-pressed", String(visible));
+  });
+});
+
+changePasswordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!changePasswordForm.reportValidity()) {
+    return;
+  }
+  const currentPassword = changePasswordForm.elements.currentPassword.value;
+  const newPassword = changePasswordForm.elements.newPassword.value;
+  const confirmPassword = changePasswordForm.elements.confirmPassword.value;
+  if (newPassword.length < 12) {
+    showPasswordChangeMessage("Use a new password with at least 12 characters.");
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    showPasswordChangeMessage("The new password and confirmation don’t match.");
+    return;
+  }
+  if (newPassword === currentPassword) {
+    showPasswordChangeMessage("Choose a new password that differs from your current one.");
+    return;
+  }
+  if (!currentUser?.email || !supabaseClient) {
+    showPasswordChangeMessage("Sign in with an email and password account before changing your password.");
+    return;
+  }
+
+  const submitButton = changePasswordForm.querySelector('[type="submit"]');
+  submitButton.disabled = true;
+  passwordChangeMessage.hidden = true;
+  try {
+    const { error: verificationError } = await supabaseClient.auth.signInWithPassword({
+      email: currentUser.email,
+      password: currentPassword,
+    });
+    if (verificationError) {
+      showPasswordChangeMessage("Your current password couldn’t be verified. Check it and try again.");
+      return;
+    }
+
+    const { error } = await supabaseClient.auth.updateUser({ password: newPassword });
+    if (error) {
+      showPasswordChangeMessage("The password couldn’t be updated. Check the account password policy and try again.");
+      return;
+    }
+    changePasswordForm.reset();
+    resetPasswordVisibility();
+    showPasswordChangeMessage("Your password has been updated.");
+  } catch (error) {
+    console.error("Could not change the account password.");
+    showPasswordChangeMessage("We couldn’t complete the password change. Please try again.");
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
 accountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!supabaseClient) {
@@ -884,9 +1316,9 @@ document.querySelector("#sign-out").addEventListener("click", async () => {
   }
 });
 
-document.querySelector("#open-task-dialog").addEventListener("click", () => openDialog(taskDialog));
-document.querySelector("#empty-add-task").addEventListener("click", () => openDialog(taskDialog));
-document.querySelector("#open-bad-dialog").addEventListener("click", () => openDialog(badDialog));
+document.querySelector("#open-task-dialog").addEventListener("click", openNewTaskDialog);
+document.querySelector("#empty-add-task").addEventListener("click", openNewTaskDialog);
+document.querySelector("#open-bad-dialog").addEventListener("click", openNewBadHabitDialog);
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
 });
@@ -899,11 +1331,21 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
   }
   const name = form.elements.name.value.trim();
   const minutes = Number(form.elements.minutes.value);
+  const scheduledAt = parseLocalDateTime(form.elements.startAt.value);
   if (!name || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
     showNotice("Add a task name and a duration between 1 and 1,440 minutes.");
     return;
   }
-  createTask({ name, minutes, saveAsHabit: form.elements.saveAsHabit.checked });
+  if (form.elements.startAt.value && scheduledAt === null) {
+    showNotice("Choose a valid local date and time for this task.");
+    return;
+  }
+  if (editingTaskId) {
+    updateTask(editingTaskId, { name, minutes, scheduledAt });
+  } else {
+    createTask({ name, minutes, scheduledAt, saveAsHabit: form.elements.saveAsHabit.checked });
+  }
+  editingTaskId = null;
   form.reset();
   taskDialog.close();
 });
@@ -919,7 +1361,12 @@ document.querySelector("#bad-form").addEventListener("submit", (event) => {
     showNotice("Add a name for the habit you’d like to change.");
     return;
   }
-  addBadHabit(name);
+  if (editingBadHabitId) {
+    updateBadHabit(editingBadHabitId, name);
+  } else {
+    addBadHabit(name);
+  }
+  editingBadHabitId = null;
   form.reset();
   badDialog.close();
 });
@@ -951,7 +1398,11 @@ void initializeAccount().then(() => {
     return;
   }
   checkDayBoundary();
+  activateDueTasks();
   render();
 });
-window.setInterval(updateLiveTimers, 1000);
+window.setInterval(() => {
+  activateDueTasks();
+  updateLiveTimers();
+}, 1000);
 window.setInterval(checkDayBoundary, 15000);
