@@ -256,6 +256,17 @@ h1 span {
   margin-bottom: 22px;
 }
 
+.streak-message {
+  margin: 0 0 13px;
+  padding: 11px 14px;
+  border: 1px solid rgb(131 214 165 / 22%);
+  border-radius: 12px;
+  background: rgb(131 214 165 / 6%);
+  color: #b7e9c7;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .summary-card {
   display: flex;
   min-height: 78px;
@@ -754,6 +765,36 @@ h1 span {
   font-size: 10px;
 }
 
+.routine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.routine-item .routine-management-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid #3a4740;
+  border-radius: 9px;
+  background: #222925;
+  color: #bac6be;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.routine-item .routine-management-button:hover {
+  border-color: #56655c;
+  background: #2a342e;
+  color: var(--text);
+}
+
+.routine-actions .button {
+  min-height: 44px;
+}
+
 .routine-empty,
 .bad-habit-empty {
   padding: 13px;
@@ -763,6 +804,16 @@ h1 span {
   font-size: 10px;
   line-height: 1.5;
   text-align: center;
+}
+
+.completion-message {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  border: 1px solid rgb(131 214 165 / 25%);
+  border-radius: 11px;
+  background: rgb(131 214 165 / 8%);
+  color: #b7e9c7;
+  font-size: 12px;
 }
 
 .habit-panel {
@@ -1117,6 +1168,103 @@ h1 span {
   color: #dce5df;
   font-size: 11px;
   font-weight: 600;
+}
+
+.time-label {
+  display: block;
+  margin: 16px 0 7px;
+  color: #dce5df;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.time-suggestion-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.time-suggestion {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgb(131 214 165 / 30%);
+  border-radius: 10px;
+  background: rgb(131 214 165 / 8%);
+  color: #b7e9c7;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.time-suggestion:hover,
+.time-suggestion[aria-pressed="true"] {
+  border-color: rgb(131 214 165 / 48%);
+  background: rgb(131 214 165 / 13%);
+}
+
+.change-time-button {
+  min-height: 44px;
+  padding: 0 10px;
+}
+
+.time-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin-top: 8px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.undo-toast {
+  position: fixed;
+  z-index: 10;
+  right: 20px;
+  bottom: 20px;
+  left: 20px;
+  display: flex;
+  width: fit-content;
+  min-width: 260px;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  margin: 0 auto;
+  padding: 7px 9px 7px 16px;
+  border: 1px solid #45534a;
+  border-radius: 13px;
+  background: #222a25;
+  color: #e4ece6;
+  box-shadow: 0 10px 35px rgb(0 0 0 / 35%);
+  font-size: 12px;
+}
+
+.undo-button {
+  min-width: 54px;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid rgb(131 214 165 / 30%);
+  border-radius: 9px;
+  background: rgb(131 214 165 / 9%);
+  color: #b7e9c7;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.undo-button:hover {
+  background: rgb(131 214 165 / 16%);
 }
 
 .form-dialog input[type="text"],

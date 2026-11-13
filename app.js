@@ -64,10 +64,15 @@ if (hasSupabaseConfig) {
 }
 let activePauseId = null;
 let editingTaskId = null;
+let editingHabitId = null;
+let taskTimeSelected = true;
 let editingBadHabitId = null;
 let audioContext = null;
 let activeOscillators = [];
 let audioUnavailableNotified = false;
+let habitUndoTimer = null;
+let pendingHabitUndo = null;
+let completionMessageTimer = null;
 let state = loadState();
 let currentUser = null;
 let accountReady = false;
@@ -94,12 +99,14 @@ function createId() {
 
 function makeDefaultState() {
   return {
-    version: 2,
+    version: 3,
     dayKey: todayKey(),
     tasks: [],
     habits: [],
     badHabits: [],
     history: [],
+    habitCompletionDays: [],
+    lastHabitCelebrationDay: null,
     soundOn: true,
   };
 }
@@ -116,20 +123,36 @@ function setSaveStatus(message) {
 function isValidState(value) {
   return (
     value &&
-    value.version === 2 &&
+    value.version === 3 &&
     typeof value.dayKey === "string" &&
     Array.isArray(value.tasks) &&
     Array.isArray(value.habits) &&
     Array.isArray(value.badHabits) &&
     Array.isArray(value.history) &&
+    Array.isArray(value.habitCompletionDays) &&
+    (value.lastHabitCelebrationDay === null || typeof value.lastHabitCelebrationDay === "string") &&
     typeof value.soundOn === "boolean"
   );
+}
+
+function getCompletedHabitDays(value) {
+  const days = new Set(Array.isArray(value.habitCompletionDays) ? value.habitCompletionDays : []);
+  const addCompletedTasks = (dayKey, tasks) => {
+    if (Array.isArray(tasks) && tasks.some((task) => task.status === "done" && task.habitId)) {
+      days.add(dayKey);
+    }
+  };
+  addCompletedTasks(value.dayKey, value.tasks);
+  for (const day of value.history || []) {
+    addCompletedTasks(day.dayKey, day.tasks);
+  }
+  return [...days].filter((dayKey) => /^\d{4}-\d{2}-\d{2}$/.test(dayKey)).sort();
 }
 
 function migrateState(value) {
   if (
     !value ||
-    (value.version !== 1 && value.version !== 2) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
     typeof value.dayKey !== "string" ||
     !Array.isArray(value.tasks) ||
     !Array.isArray(value.habits) ||
@@ -139,34 +162,44 @@ function migrateState(value) {
   ) {
     return null;
   }
-  if (value.version === 2) {
+  if (value.version === 3) {
     return value;
   }
 
+  let migrated = value;
+  if (value.version === 1) {
+    migrated = {
+      ...value,
+      version: 2,
+      tasks: value.tasks.map((task) => ({
+        ...task,
+        scheduledAt: Number.isFinite(task.scheduledAt) ? task.scheduledAt : null,
+      })),
+      badHabits: value.badHabits.map((habit) => ({
+        ...habit,
+        checkedIn: Boolean(habit.avoided),
+      })),
+      history: value.history.map((day) => ({
+        ...day,
+        badHabits: (Array.isArray(day.badHabits) ? day.badHabits : []).map((habit) => {
+          const currentHabit = value.badHabits.find(
+            (item) => item.name.toLocaleLowerCase() === String(habit.name).toLocaleLowerCase()
+          );
+          return {
+            ...habit,
+            id: habit.id || currentHabit?.id || null,
+            checkedIn: Boolean(habit.avoided),
+          };
+        }),
+      })),
+    };
+  }
+
   return {
-    ...value,
-    version: 2,
-    tasks: value.tasks.map((task) => ({
-      ...task,
-      scheduledAt: Number.isFinite(task.scheduledAt) ? task.scheduledAt : null,
-    })),
-    badHabits: value.badHabits.map((habit) => ({
-      ...habit,
-      checkedIn: Boolean(habit.avoided),
-    })),
-    history: value.history.map((day) => ({
-      ...day,
-      badHabits: (Array.isArray(day.badHabits) ? day.badHabits : []).map((habit) => {
-        const currentHabit = value.badHabits.find(
-          (item) => item.name.toLocaleLowerCase() === String(habit.name).toLocaleLowerCase()
-        );
-        return {
-          ...habit,
-          id: habit.id || currentHabit?.id || null,
-          checkedIn: Boolean(habit.avoided),
-        };
-      }),
-    })),
+    ...migrated,
+    version: 3,
+    habitCompletionDays: getCompletedHabitDays(migrated),
+    lastHabitCelebrationDay: null,
   };
 }
 
@@ -358,16 +391,39 @@ function updateTask(taskId, { name, minutes, scheduledAt }) {
 }
 
 function finishTask(taskId) {
+  checkDayBoundary();
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task || task.status !== "active") {
     return;
   }
+  const isDailyHabit = Boolean(task.habitId);
+  const isCurrentHabit = isDailyHabit &&
+    state.habits.some((habit) => habit.id === task.habitId);
   task.outcome = taskColor(task);
   task.status = "done";
   task.completedAt = Date.now();
+  let celebrateAllHabits = false;
+  if (isDailyHabit) {
+    state.habitCompletionDays = getCompletedHabitDays(state);
+    state.habitCompletionDays = [...new Set([...state.habitCompletionDays, state.dayKey])].sort();
+    celebrateAllHabits = isCurrentHabit &&
+      state.habits.length > 0 &&
+      state.lastHabitCelebrationDay !== state.dayKey &&
+      state.habits.every((habit) =>
+        state.tasks.some((item) => item.habitId === habit.id && item.status === "done")
+      );
+    if (celebrateAllHabits) {
+      state.lastHabitCelebrationDay = state.dayKey;
+    }
+  }
   saveState();
   render();
-  void playSound("task-completed");
+  if (celebrateAllHabits) {
+    showCompletionMessage();
+    void playSound("all-habits-completed");
+  } else {
+    void playSound("task-completed");
+  }
 }
 
 function removeTask(taskId) {
@@ -384,6 +440,64 @@ function startRoutine(habit) {
     return;
   }
   createTask({ name: habit.name, minutes: habit.minutes, habitId: habit.id });
+}
+
+function updateHabit(habitId, name, minutes) {
+  const habit = state.habits.find((item) => item.id === habitId);
+  if (!habit) {
+    return;
+  }
+  habit.name = name;
+  habit.minutes = minutes;
+  saveState();
+  render();
+}
+
+function showHabitUndo(habit, index) {
+  if (habitUndoTimer) {
+    window.clearTimeout(habitUndoTimer);
+  }
+  pendingHabitUndo = { habit, index, userId: currentUser?.id || null };
+  document.querySelector("#undo-toast-message").textContent = "Habit removed.";
+  document.querySelector("#undo-toast").hidden = false;
+  document.querySelector("#undo-delete-habit").focus();
+  habitUndoTimer = window.setTimeout(() => {
+    pendingHabitUndo = null;
+    document.querySelector("#undo-toast").hidden = true;
+    habitUndoTimer = null;
+  }, 8000);
+}
+
+function clearHabitUndo() {
+  if (habitUndoTimer) {
+    window.clearTimeout(habitUndoTimer);
+    habitUndoTimer = null;
+  }
+  pendingHabitUndo = null;
+  document.querySelector("#undo-toast").hidden = true;
+}
+
+function removeHabit(habitId) {
+  const index = state.habits.findIndex((habit) => habit.id === habitId);
+  if (index < 0) {
+    return;
+  }
+  const [habit] = state.habits.splice(index, 1);
+  saveState();
+  render();
+  showHabitUndo(habit, index);
+}
+
+function undoRemoveHabit() {
+  if (!pendingHabitUndo || pendingHabitUndo.userId !== (currentUser?.id || null)) {
+    clearHabitUndo();
+    return;
+  }
+  const { habit, index } = pendingHabitUndo;
+  state.habits.splice(Math.min(index, state.habits.length), 0, habit);
+  clearHabitUndo();
+  saveState();
+  render();
 }
 
 function addBadHabit(name) {
@@ -571,7 +685,21 @@ function buildRoutineItem(habit) {
     button.setAttribute("aria-label", `Start ${habit.name} today`);
     button.addEventListener("click", () => startRoutine(habit));
   }
-  item.append(button);
+  const actions = makeElement("div", "routine-actions");
+  actions.append(button);
+
+  const edit = makeElement("button", "routine-management-button", "Edit");
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${habit.name}`);
+  edit.addEventListener("click", () => openHabitEditor(habit.id));
+  actions.append(edit);
+
+  const remove = makeElement("button", "routine-management-button", "Delete");
+  remove.type = "button";
+  remove.setAttribute("aria-label", `Delete ${habit.name}`);
+  remove.addEventListener("click", () => removeHabit(habit.id));
+  actions.append(remove);
+  item.append(actions);
   return item;
 }
 
@@ -742,6 +870,75 @@ function updateSummary() {
   document.querySelector("#resisted-count").textContent = String(resisted);
 }
 
+function getStreakSummary() {
+  const days = getCompletedHabitDays(state).filter((dayKey) => dayKey <= todayKey());
+  if (!days.length) {
+    return null;
+  }
+  const completed = new Set(days);
+  let best = 0;
+  let run = 0;
+  let previousDate = null;
+  for (const dayKey of days) {
+    const date = new Date(`${dayKey}T12:00:00`);
+    const gap = previousDate ? Math.round((date - previousDate) / 86400000) : 0;
+    run = gap === 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+    previousDate = date;
+  }
+
+  const today = todayKey();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const latestActiveDay = completed.has(today) ? today : todayKey(yesterday);
+  if (!completed.has(latestActiveDay)) {
+    return { current: 0, best };
+  }
+  let current = 1;
+  let day = new Date(`${latestActiveDay}T12:00:00`);
+  while (true) {
+    day.setDate(day.getDate() - 1);
+    if (!completed.has(todayKey(day))) {
+      break;
+    }
+    current += 1;
+  }
+  return { current, best, completedToday: completed.has(today) };
+}
+
+function renderStreak() {
+  const message = document.querySelector("#streak-message");
+  const streak = state.habits.length > 0 ? getStreakSummary() : null;
+  if (!streak) {
+    message.hidden = true;
+    message.textContent = "";
+    return;
+  }
+  if (!streak.current) {
+    message.textContent = `Fresh start today · Best streak: ${streak.best} ${streak.best === 1 ? "day" : "days"}.`;
+  } else {
+    const currentText = `${streak.current} ${streak.current === 1 ? "day" : "days"} in a row`;
+    const bestText = `${streak.best} ${streak.best === 1 ? "day" : "days"}`;
+    message.textContent = streak.completedToday
+      ? `${currentText} · Best: ${bestText}.`
+      : `${currentText} · Ready when you are · Best: ${bestText}.`;
+  }
+  message.hidden = false;
+}
+
+function showCompletionMessage() {
+  const message = document.querySelector("#completion-message");
+  message.textContent = "All done for today. Nice work.";
+  message.hidden = false;
+  if (completionMessageTimer) {
+    window.clearTimeout(completionMessageTimer);
+  }
+  completionMessageTimer = window.setTimeout(() => {
+    message.hidden = true;
+    completionMessageTimer = null;
+  }, 6000);
+}
+
 function render() {
   document.querySelector("#today-label").textContent = new Date().toLocaleDateString(undefined, {
     weekday: "short",
@@ -755,6 +952,7 @@ function render() {
   routineList.replaceChildren(...state.habits.map(buildRoutineItem));
   document.querySelector("#routine-count").textContent = `${state.habits.length} saved`;
   document.querySelector("#routine-empty").hidden = state.habits.length > 0;
+  renderStreak();
 
   badHabitList.replaceChildren(...state.badHabits.map(buildBadHabitItem));
   document.querySelector("#bad-habit-empty").hidden = state.badHabits.length > 0;
@@ -886,6 +1084,16 @@ async function playSound(kind) {
       { frequency: 783.99, offset: 0.2, duration: 0.25, volume: 0.034 },
       { frequency: 1046.5, offset: 0.3, duration: 0.34, volume: 0.034 },
     ],
+    "all-habits-completed": [
+      { frequency: 523.25, offset: 0, duration: 0.52, volume: 0.014 },
+      { frequency: 659.25, offset: 0, duration: 0.52, volume: 0.014 },
+      { frequency: 783.99, offset: 0, duration: 0.52, volume: 0.014 },
+      { frequency: 523.25, offset: 0.08, duration: 0.3, volume: 0.019 },
+      { frequency: 659.25, offset: 0.2, duration: 0.34, volume: 0.019 },
+      { frequency: 783.99, offset: 0.32, duration: 0.38, volume: 0.019 },
+      { frequency: 1046.5, offset: 0.44, duration: 0.48, volume: 0.019 },
+      { frequency: 1318.51, offset: 0.56, duration: 0.6, volume: 0.017 },
+    ],
     "habit-avoided": [
       { frequency: 659.25, offset: 0, duration: 0.2, volume: 0.03 },
       { frequency: 783.99, offset: 0.11, duration: 0.24, volume: 0.03 },
@@ -949,11 +1157,17 @@ function openDialog(dialog) {
 
 function openNewTaskDialog() {
   editingTaskId = null;
+  editingHabitId = null;
+  taskTimeSelected = true;
   const form = document.querySelector("#task-form");
   form.reset();
+  document.querySelector("#task-time-control").hidden = false;
+  document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-dialog-title").textContent = "Add a task";
   form.querySelector('[type="submit"]').textContent = "Add to today";
   document.querySelector("#save-as-habit-row").hidden = false;
+  document.querySelector("#task-form-hint").hidden = false;
+  setTaskTime(suggestedTaskTime());
   openDialog(taskDialog);
 }
 
@@ -963,13 +1177,66 @@ function openTaskEditor(taskId) {
     return;
   }
   editingTaskId = taskId;
+  editingHabitId = null;
+  taskTimeSelected = task.scheduledAt !== null;
   const form = document.querySelector("#task-form");
   form.elements.name.value = task.name;
   form.elements.minutes.value = String(task.minutes);
-  form.elements.startAt.value = task.scheduledAt ? toLocalDateTimeInput(task.scheduledAt) : "";
+  document.querySelector("#task-time-control").hidden = false;
+  document.querySelector("#task-time-picker").hidden = true;
+  document.querySelector("#task-form-hint").hidden = false;
+  setTaskTime(task.scheduledAt || suggestedTaskTime());
   document.querySelector("#task-dialog-title").textContent = "Edit task";
   form.querySelector('[type="submit"]').textContent = "Save changes";
   document.querySelector("#save-as-habit-row").hidden = true;
+  openDialog(taskDialog);
+}
+
+function suggestedTaskTime() {
+  const date = new Date();
+  date.setSeconds(0, 0);
+  date.setMinutes(Math.round(date.getMinutes() / 5) * 5);
+  return date.getTime();
+}
+
+function setTaskTime(timestamp) {
+  const input = document.querySelector("#task-start-at");
+  input.value = toLocalDateTimeInput(timestamp);
+  updateTaskTimeLabel(timestamp);
+}
+
+function updateTaskTimeLabel(timestamp) {
+  const suggestion = document.querySelector("#suggested-task-time");
+  if (!Number.isFinite(timestamp)) {
+    suggestion.textContent = "Choose a start time";
+    suggestion.setAttribute("aria-pressed", "false");
+    return;
+  }
+  const date = new Date(timestamp);
+  const dateLabel = todayKey(date) === todayKey()
+    ? "Today"
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const timeLabel = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  suggestion.textContent = `${dateLabel} at ${timeLabel}`;
+  suggestion.setAttribute("aria-pressed", "true");
+}
+
+function openHabitEditor(habitId) {
+  const habit = state.habits.find((item) => item.id === habitId);
+  if (!habit) {
+    return;
+  }
+  editingTaskId = null;
+  editingHabitId = habitId;
+  const form = document.querySelector("#task-form");
+  form.elements.name.value = habit.name;
+  form.elements.minutes.value = String(habit.minutes);
+  document.querySelector("#task-time-control").hidden = true;
+  document.querySelector("#task-time-picker").hidden = true;
+  document.querySelector("#task-dialog-title").textContent = "Edit daily habit";
+  form.querySelector('[type="submit"]').textContent = "Save changes";
+  document.querySelector("#save-as-habit-row").hidden = true;
+  document.querySelector("#task-form-hint").hidden = true;
   openDialog(taskDialog);
 }
 
@@ -1054,6 +1321,7 @@ async function activateAccount(user) {
     if (!currentUser) {
       return;
     }
+    clearHabitUndo();
     currentUser = null;
     accountReady = true;
     cloudWriteError = null;
@@ -1068,6 +1336,7 @@ async function activateAccount(user) {
     return;
   }
 
+  clearHabitUndo();
   currentUser = user;
   accountReady = false;
   document.querySelector("main").inert = true;
@@ -1319,6 +1588,28 @@ document.querySelector("#sign-out").addEventListener("click", async () => {
 document.querySelector("#open-task-dialog").addEventListener("click", openNewTaskDialog);
 document.querySelector("#empty-add-task").addEventListener("click", openNewTaskDialog);
 document.querySelector("#open-bad-dialog").addEventListener("click", openNewBadHabitDialog);
+document.querySelector("#suggested-task-time").addEventListener("click", () => {
+  taskTimeSelected = true;
+  document.querySelector("#task-time-picker").hidden = true;
+});
+document.querySelector("#change-task-time").addEventListener("click", () => {
+  const picker = document.querySelector("#task-time-picker");
+  picker.hidden = false;
+  document.querySelector("#task-start-at").focus();
+});
+document.querySelector("#confirm-task-time").addEventListener("click", () => {
+  const timestamp = parseLocalDateTime(document.querySelector("#task-start-at").value);
+  taskTimeSelected = timestamp !== null;
+  updateTaskTimeLabel(timestamp);
+  document.querySelector("#task-time-picker").hidden = true;
+  document.querySelector("#suggested-task-time").focus();
+});
+document.querySelector("#task-start-at").addEventListener("input", (event) => {
+  const timestamp = parseLocalDateTime(event.currentTarget.value);
+  taskTimeSelected = timestamp !== null;
+  updateTaskTimeLabel(timestamp);
+});
+document.querySelector("#undo-delete-habit").addEventListener("click", undoRemoveHabit);
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
 });
@@ -1331,21 +1622,24 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
   }
   const name = form.elements.name.value.trim();
   const minutes = Number(form.elements.minutes.value);
-  const scheduledAt = parseLocalDateTime(form.elements.startAt.value);
+  const scheduledAt = taskTimeSelected ? parseLocalDateTime(form.elements.startAt.value) : null;
   if (!name || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
     showNotice("Add a task name and a duration between 1 and 1,440 minutes.");
     return;
   }
-  if (form.elements.startAt.value && scheduledAt === null) {
+  if (!editingHabitId && taskTimeSelected && form.elements.startAt.value && scheduledAt === null) {
     showNotice("Choose a valid local date and time for this task.");
     return;
   }
-  if (editingTaskId) {
+  if (editingHabitId) {
+    updateHabit(editingHabitId, name, minutes);
+  } else if (editingTaskId) {
     updateTask(editingTaskId, { name, minutes, scheduledAt });
   } else {
     createTask({ name, minutes, scheduledAt, saveAsHabit: form.elements.saveAsHabit.checked });
   }
   editingTaskId = null;
+  editingHabitId = null;
   form.reset();
   taskDialog.close();
 });

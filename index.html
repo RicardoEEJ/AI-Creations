@@ -54,6 +54,7 @@
           </aside>
         </section>
 
+        <p class="streak-message" id="streak-message" role="status" aria-live="polite" hidden></p>
         <section class="summary-grid" aria-label="Today's overview">
           <article class="summary-card">
             <span class="summary-icon icon-green" aria-hidden="true">✓</span>
@@ -115,6 +116,7 @@
                 Your saved habits are here whenever you want to make time for them today.
               </p>
               <div class="routine-list" id="routine-list"></div>
+              <p class="completion-message" id="completion-message" role="status" aria-live="polite" hidden></p>
               <div class="routine-empty" id="routine-empty">
                 Habits you choose to repeat will show up here tomorrow.
               </div>
@@ -185,19 +187,34 @@
           <input id="task-minutes" name="minutes" type="number" min="1" max="1440" value="30" required />
           <span>minutes</span>
         </div>
-        <label for="task-start-at">When should it start? (optional)</label>
-        <input id="task-start-at" name="startAt" type="datetime-local" step="1" />
+        <div class="task-time-control" id="task-time-control">
+          <span class="time-label">Start time</span>
+          <div class="time-suggestion-row">
+            <button class="time-suggestion" id="suggested-task-time" type="button" aria-pressed="true"></button>
+            <button class="text-button change-time-button" id="change-task-time" type="button">Change</button>
+          </div>
+          <div class="time-picker" id="task-time-picker" hidden>
+            <label class="visually-hidden" for="task-start-at">Choose a start date and time</label>
+            <input id="task-start-at" name="startAt" type="datetime-local" step="1" />
+            <button class="text-button change-time-button" id="confirm-task-time" type="button">Use this time</button>
+          </div>
+        </div>
         <label class="checkbox-row" id="save-as-habit-row" for="save-as-habit">
           <input id="save-as-habit" name="saveAsHabit" type="checkbox" checked />
           <span>Save this as a daily habit for another day</span>
         </label>
-        <p class="form-hint">Without a start time, your timer begins as soon as you add the task. Scheduled tasks begin when their time arrives.</p>
+        <p class="form-hint" id="task-form-hint">Your timer begins when the selected time arrives.</p>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-close-dialog="task-dialog">Cancel</button>
           <button class="button button-primary" type="submit">Add to today</button>
         </div>
       </form>
     </dialog>
+
+    <div class="undo-toast" id="undo-toast" role="status" aria-live="polite" hidden>
+      <span id="undo-toast-message"></span>
+      <button class="undo-button" id="undo-delete-habit" type="button">Undo</button>
+    </div>
 
     <dialog class="form-dialog" id="bad-dialog" aria-labelledby="bad-dialog-title">
       <form id="bad-form">
