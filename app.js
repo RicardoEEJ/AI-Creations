@@ -1,4 +1,6 @@
 const STORAGE_KEY = "steady-habit-board-v1";
+const STATE_VERSION = 6;
+const HABIT_UNDO_DURATION_MS = 9000;
 const COLOR_MESSAGES = {
   green: [
     "You made time for what matters. That counts.",
@@ -21,17 +23,13 @@ const COLOR_MESSAGES = {
     "One unfinished day doesn’t define you.",
   ],
 };
-const QUOTES = [
-  "You don’t have to do it all. Just the next little thing.",
-  "Progress can be quiet. It still counts.",
-  "Begin where you are. One small step is enough.",
-  "A kinder pace is still a pace forward.",
-  "You’re allowed to make today easier for yourself.",
-];
+const QUOTES = window.STEADY_QUOTES;
 const REPLACEMENTS = ["Drink some water", "Stretch for 30 seconds", "Step outside for a moment"];
 
 const taskDialog = document.querySelector("#task-dialog");
 const badDialog = document.querySelector("#bad-dialog");
+const cancelTaskDialog = document.querySelector("#cancel-task-dialog");
+const overtimeDialog = document.querySelector("#overtime-dialog");
 const taskList = document.querySelector("#task-list");
 const routineList = document.querySelector("#routine-list");
 const badHabitList = document.querySelector("#bad-habit-list");
@@ -73,6 +71,10 @@ let audioUnavailableNotified = false;
 let habitUndoTimer = null;
 let pendingHabitUndo = null;
 let completionMessageTimer = null;
+let pendingCancelTaskId = null;
+let pendingOvertimeTaskId = null;
+let previousStreakCount = null;
+let currentQuoteIndex = null;
 let state = loadState();
 let currentUser = null;
 let accountReady = false;
@@ -99,7 +101,7 @@ function createId() {
 
 function makeDefaultState() {
   return {
-    version: 3,
+    version: STATE_VERSION,
     dayKey: todayKey(),
     tasks: [],
     habits: [],
@@ -108,6 +110,7 @@ function makeDefaultState() {
     habitCompletionDays: [],
     lastHabitCelebrationDay: null,
     soundOn: true,
+    habitTimeLog: [],
   };
 }
 
@@ -123,7 +126,7 @@ function setSaveStatus(message) {
 function isValidState(value) {
   return (
     value &&
-    value.version === 3 &&
+    value.version === STATE_VERSION &&
     typeof value.dayKey === "string" &&
     Array.isArray(value.tasks) &&
     Array.isArray(value.habits) &&
@@ -131,7 +134,8 @@ function isValidState(value) {
     Array.isArray(value.history) &&
     Array.isArray(value.habitCompletionDays) &&
     (value.lastHabitCelebrationDay === null || typeof value.lastHabitCelebrationDay === "string") &&
-    typeof value.soundOn === "boolean"
+    typeof value.soundOn === "boolean" &&
+    Array.isArray(value.habitTimeLog)
   );
 }
 
@@ -152,7 +156,7 @@ function getCompletedHabitDays(value) {
 function migrateState(value) {
   if (
     !value ||
-    (value.version !== 1 && value.version !== 2 && value.version !== 3) ||
+    (value.version !== 1 && value.version !== 2 && value.version !== 3 && value.version !== 5 && value.version !== STATE_VERSION) ||
     typeof value.dayKey !== "string" ||
     !Array.isArray(value.tasks) ||
     !Array.isArray(value.habits) ||
@@ -162,7 +166,7 @@ function migrateState(value) {
   ) {
     return null;
   }
-  if (value.version === 3) {
+  if (value.version === STATE_VERSION) {
     return value;
   }
 
@@ -195,11 +199,80 @@ function migrateState(value) {
     };
   }
 
+  if (migrated.version === 1 || migrated.version === 2) {
+    migrated = {
+      ...migrated,
+      version: 3,
+      habitCompletionDays: getCompletedHabitDays(migrated),
+      lastHabitCelebrationDay: null,
+    };
+  }
+
+  const now = Date.now();
+  const normalizeTask = (task, taskDayKey, currentDay) => {
+    const startAt = Number.isFinite(task.scheduledAt) ? task.scheduledAt : task.createdAt;
+    const elapsedMs = Number.isFinite(task.elapsedMs)
+      ? Math.max(0, task.elapsedMs)
+      : task.status === "active" && currentDay && Number.isFinite(startAt)
+        ? Math.max(0, now - startAt)
+        : 0;
+    const lastResumedAt = task.status === "active"
+      ? Number.isFinite(task.lastResumedAt) ? task.lastResumedAt : now
+      : null;
+    return {
+      ...task,
+      elapsedMs,
+      recordedElapsedMs: Number.isFinite(task.recordedElapsedMs)
+        ? Math.max(0, task.recordedElapsedMs)
+        : 0,
+      recordedOvertimeMs: Number.isFinite(task.recordedOvertimeMs)
+        ? Math.max(0, task.recordedOvertimeMs)
+        : 0,
+      lastResumedAt,
+      sessionDayKey: typeof task.sessionDayKey === "string"
+        ? task.sessionDayKey
+        : Number.isFinite(startAt) ? todayKey(new Date(startAt)) : taskDayKey,
+      overtimeAccepted: Boolean(task.overtimeAccepted),
+      overtimeDeclined: Boolean(task.overtimeDeclined),
+    };
+  };
+  const legacyTimeLogs = [];
+  if (value.version === 5) {
+    for (const habit of migrated.habits) {
+      if (!habit || !habit.id || !Array.isArray(habit.timeLog)) {
+        continue;
+      }
+      habit.timeLog.forEach((entry, index) => {
+        if (
+          entry &&
+          typeof entry.date === "string" &&
+          Number.isFinite(entry.minutes) &&
+          entry.minutes >= 0
+        ) {
+          legacyTimeLogs.push({
+            sessionId: `legacy-${habit.id}-${entry.date}-${index}`,
+            habitId: habit.id,
+            dayKey: entry.date,
+            elapsedMs: entry.minutes * 60 * 1000,
+            overtimeMs: 0,
+            legacy: true,
+          });
+        }
+      });
+    }
+  }
+  const existingTimeLogs = Array.isArray(migrated.habitTimeLog) ? migrated.habitTimeLog : [];
   return {
     ...migrated,
-    version: 3,
-    habitCompletionDays: getCompletedHabitDays(migrated),
-    lastHabitCelebrationDay: null,
+    version: STATE_VERSION,
+    tasks: migrated.tasks.map((task) => normalizeTask(task, migrated.dayKey, true)),
+    history: migrated.history.map((day) => ({
+      ...day,
+      tasks: Array.isArray(day.tasks)
+        ? day.tasks.map((task) => normalizeTask(task, day.dayKey, false))
+        : [],
+    })),
+    habitTimeLog: [...existingTimeLogs, ...legacyTimeLogs],
   };
 }
 
@@ -315,6 +388,94 @@ function formatDuration(milliseconds) {
   return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
 }
 
+function formatHabitTime(milliseconds) {
+  const minutes = Math.floor(Math.max(0, milliseconds) / 60000);
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return hours > 0 ? `${hours}h ${String(remainingMinutes).padStart(2, "0")}m` : `${minutes}m`;
+}
+
+function getTaskElapsedMs(task, now = Date.now()) {
+  const accumulated = Number.isFinite(task.elapsedMs) ? Math.max(0, task.elapsedMs) : 0;
+  if (task.status !== "active" || !Number.isFinite(task.lastResumedAt)) {
+    return accumulated;
+  }
+  return accumulated + Math.max(0, now - task.lastResumedAt);
+}
+
+function getTaskRemainingMs(task, now = Date.now()) {
+  return task.durationMs - getTaskElapsedMs(task, now);
+}
+
+function commitTaskTime(task, now = Date.now()) {
+  const elapsedMs = task.overtimeAccepted
+    ? getTaskElapsedMs(task, now)
+    : Math.min(getTaskElapsedMs(task, now), task.durationMs);
+  task.elapsedMs = elapsedMs;
+  if (task.status === "active") {
+    task.lastResumedAt = now;
+  }
+
+  if (!task.habitId) {
+    return;
+  }
+
+  const previousElapsedMs = Number.isFinite(task.recordedElapsedMs)
+    ? Math.max(0, task.recordedElapsedMs)
+    : 0;
+  const previousOvertimeMs = Number.isFinite(task.recordedOvertimeMs)
+    ? Math.max(0, task.recordedOvertimeMs)
+    : 0;
+  const overtimeMs = task.overtimeAccepted
+    ? Math.max(0, elapsedMs - task.durationMs)
+    : 0;
+  const elapsedDelta = Math.max(0, elapsedMs - previousElapsedMs);
+  const overtimeDelta = Math.max(0, overtimeMs - previousOvertimeMs);
+
+  if (elapsedDelta > 0 || overtimeDelta > 0) {
+    let entry = state.habitTimeLog.find((item) => item.sessionId === task.id);
+    if (!entry) {
+      entry = {
+        sessionId: task.id,
+        habitId: task.habitId,
+        dayKey: task.sessionDayKey || state.dayKey,
+        elapsedMs: 0,
+        overtimeMs: 0,
+      };
+      state.habitTimeLog.push(entry);
+    }
+    entry.elapsedMs += elapsedDelta;
+    entry.overtimeMs += overtimeDelta;
+  }
+
+  task.recordedElapsedMs = Math.max(previousElapsedMs, elapsedMs);
+  task.recordedOvertimeMs = Math.max(previousOvertimeMs, overtimeMs);
+}
+
+function getHabitTimeTotals(habitId, now = Date.now()) {
+  const totals = state.habitTimeLog
+    .filter((entry) => entry.habitId === habitId)
+    .reduce((sum, entry) => ({
+      elapsedMs: sum.elapsedMs + (Number.isFinite(entry.elapsedMs) ? entry.elapsedMs : 0),
+      overtimeMs: sum.overtimeMs + (Number.isFinite(entry.overtimeMs) ? entry.overtimeMs : 0),
+    }), { elapsedMs: 0, overtimeMs: 0 });
+
+  for (const task of state.tasks) {
+    if (task.habitId !== habitId) {
+      continue;
+    }
+    const elapsedMs = task.overtimeAccepted
+      ? getTaskElapsedMs(task, now)
+      : Math.min(getTaskElapsedMs(task, now), task.durationMs);
+    const recordedElapsedMs = Number.isFinite(task.recordedElapsedMs) ? task.recordedElapsedMs : 0;
+    const overtimeMs = task.overtimeAccepted ? Math.max(0, elapsedMs - task.durationMs) : 0;
+    const recordedOvertimeMs = Number.isFinite(task.recordedOvertimeMs) ? task.recordedOvertimeMs : 0;
+    totals.elapsedMs += Math.max(0, elapsedMs - recordedElapsedMs);
+    totals.overtimeMs += Math.max(0, overtimeMs - recordedOvertimeMs);
+  }
+  return totals;
+}
+
 function taskColor(task, now = Date.now()) {
   if (task.status === "done") {
     return task.outcome || "gray";
@@ -322,7 +483,7 @@ function taskColor(task, now = Date.now()) {
   if (task.status === "missed" || task.status === "scheduled") {
     return "gray";
   }
-  const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - now;
+  const remaining = getTaskRemainingMs(task, now);
   const ratio = remaining / task.durationMs;
   if (ratio > 0.5) {
     return "green";
@@ -344,6 +505,7 @@ function taskMessage(color) {
 
 function createTask({ name, minutes, habitId = null, saveAsHabit = false, scheduledAt = null }) {
   const now = Date.now();
+  const startsLater = Number.isFinite(scheduledAt) && scheduledAt > now;
   let linkedHabitId = habitId;
   if (saveAsHabit) {
     const existing = state.habits.find(
@@ -364,7 +526,14 @@ function createTask({ name, minutes, habitId = null, saveAsHabit = false, schedu
     durationMs: minutes * 60 * 1000,
     createdAt: now,
     scheduledAt,
-    status: scheduledAt > now ? "scheduled" : "active",
+    status: startsLater ? "scheduled" : "active",
+    elapsedMs: 0,
+    recordedElapsedMs: 0,
+    recordedOvertimeMs: 0,
+    lastResumedAt: startsLater ? null : now,
+    sessionDayKey: startsLater ? todayKey(new Date(scheduledAt)) : state.dayKey,
+    overtimeAccepted: false,
+    overtimeDeclined: false,
     outcome: null,
     completedAt: null,
     habitId: linkedHabitId,
@@ -379,12 +548,20 @@ function updateTask(taskId, { name, minutes, scheduledAt }) {
   if (!task) {
     return;
   }
+  const now = Date.now();
   task.name = name;
   task.minutes = minutes;
   task.durationMs = minutes * 60 * 1000;
   task.scheduledAt = scheduledAt;
-  if (task.status === "scheduled" || task.status === "active") {
-    task.status = scheduledAt > Date.now() ? "scheduled" : "active";
+  if (task.status === "scheduled") {
+    if (Number.isFinite(scheduledAt) && scheduledAt > now) {
+      task.lastResumedAt = null;
+      task.sessionDayKey = todayKey(new Date(scheduledAt));
+    } else {
+      task.status = "active";
+      task.lastResumedAt = now;
+      task.sessionDayKey = state.dayKey;
+    }
   }
   saveState();
   render();
@@ -393,15 +570,19 @@ function updateTask(taskId, { name, minutes, scheduledAt }) {
 function finishTask(taskId) {
   checkDayBoundary();
   const task = state.tasks.find((item) => item.id === taskId);
-  if (!task || task.status !== "active") {
+  if (!task || (task.status !== "active" && task.status !== "paused")) {
     return;
   }
+  const allTasksWereDone = areAllTasksDone();
+  const now = Date.now();
+  commitTaskTime(task, now);
   const isDailyHabit = Boolean(task.habitId);
   const isCurrentHabit = isDailyHabit &&
     state.habits.some((habit) => habit.id === task.habitId);
-  task.outcome = taskColor(task);
+  task.outcome = taskColor(task, now);
   task.status = "done";
-  task.completedAt = Date.now();
+  task.lastResumedAt = null;
+  task.completedAt = now;
   let celebrateAllHabits = false;
   if (isDailyHabit) {
     state.habitCompletionDays = getCompletedHabitDays(state);
@@ -416,9 +597,11 @@ function finishTask(taskId) {
       state.lastHabitCelebrationDay = state.dayKey;
     }
   }
+  commitTaskTime(task, now);
+  const allTasksAreDone = areAllTasksDone();
   saveState();
   render();
-  if (celebrateAllHabits) {
+  if (celebrateAllHabits || (!allTasksWereDone && allTasksAreDone)) {
     showCompletionMessage();
     void playSound("all-habits-completed");
   } else {
@@ -426,8 +609,65 @@ function finishTask(taskId) {
   }
 }
 
+function areAllTasksDone() {
+  return state.tasks.length > 0 && state.tasks.every((task) => task.status === "done");
+}
+
 function removeTask(taskId) {
-  state.tasks = state.tasks.filter((task) => task.id !== taskId);
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    return;
+  }
+  if (task.status === "active" || task.status === "paused") {
+    pendingCancelTaskId = taskId;
+    openDialog(cancelTaskDialog);
+    document.querySelector("#keep-task-going").focus();
+    return;
+  }
+  discardTask(taskId);
+}
+
+function pauseTask(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || task.status !== "active") {
+    return;
+  }
+  commitTaskTime(task);
+  task.status = "paused";
+  task.lastResumedAt = null;
+  saveState();
+  render();
+}
+
+function resumeTask(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task || task.status !== "paused") {
+    return;
+  }
+  task.status = "active";
+  task.lastResumedAt = Date.now();
+  saveState();
+  render();
+}
+
+function confirmCancelTask() {
+  const taskId = pendingCancelTaskId;
+  pendingCancelTaskId = null;
+  cancelTaskDialog.close();
+  if (taskId) {
+    discardTask(taskId);
+  }
+}
+
+function discardTask(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) {
+    return;
+  }
+  if (task.status === "active" || task.status === "paused") {
+    commitTaskTime(task);
+  }
+  state.tasks = state.tasks.filter((item) => item.id !== taskId);
   saveState();
   render();
 }
@@ -453,19 +693,21 @@ function updateHabit(habitId, name, minutes) {
   render();
 }
 
-function showHabitUndo(habit, index) {
+function showHabitUndo(habit, index, taskSnapshot, taskIndex, wasRunning) {
   if (habitUndoTimer) {
     window.clearTimeout(habitUndoTimer);
   }
-  pendingHabitUndo = { habit, index, userId: currentUser?.id || null };
-  document.querySelector("#undo-toast-message").textContent = "Habit removed.";
+  pendingHabitUndo = { habit, index, taskSnapshot, taskIndex, wasRunning, userId: currentUser?.id || null };
+  document.querySelector("#undo-toast-message").textContent = taskSnapshot
+    ? "Habit and today’s session removed."
+    : "Habit removed.";
   document.querySelector("#undo-toast").hidden = false;
   document.querySelector("#undo-delete-habit").focus();
   habitUndoTimer = window.setTimeout(() => {
     pendingHabitUndo = null;
     document.querySelector("#undo-toast").hidden = true;
     habitUndoTimer = null;
-  }, 8000);
+  }, HABIT_UNDO_DURATION_MS);
 }
 
 function clearHabitUndo() {
@@ -483,9 +725,28 @@ function removeHabit(habitId) {
     return;
   }
   const [habit] = state.habits.splice(index, 1);
+  let taskSnapshot = null;
+  let taskIndex = -1;
+  let wasRunning = false;
+  const linkedTaskIndex = state.tasks.findIndex((task) =>
+    task.habitId === habitId &&
+    (task.status === "active" || task.status === "paused" || task.status === "scheduled")
+  );
+  if (linkedTaskIndex >= 0) {
+    const task = state.tasks[linkedTaskIndex];
+    wasRunning = task.status === "active";
+    commitTaskTime(task);
+    if (task.status === "active") {
+      task.status = "paused";
+      task.lastResumedAt = null;
+    }
+    taskSnapshot = { ...task };
+    taskIndex = linkedTaskIndex;
+    state.tasks.splice(linkedTaskIndex, 1);
+  }
   saveState();
   render();
-  showHabitUndo(habit, index);
+  showHabitUndo(habit, index, taskSnapshot, taskIndex, wasRunning);
 }
 
 function undoRemoveHabit() {
@@ -493,8 +754,16 @@ function undoRemoveHabit() {
     clearHabitUndo();
     return;
   }
-  const { habit, index } = pendingHabitUndo;
+  const { habit, index, taskSnapshot, taskIndex, wasRunning } = pendingHabitUndo;
   state.habits.splice(Math.min(index, state.habits.length), 0, habit);
+  if (taskSnapshot) {
+    const restoredTask = { ...taskSnapshot };
+    if (wasRunning) {
+      restoredTask.status = "active";
+      restoredTask.lastResumedAt = Date.now();
+    }
+    state.tasks.splice(Math.min(taskIndex, state.tasks.length), 0, restoredTask);
+  }
   clearHabitUndo();
   saveState();
   render();
@@ -578,14 +847,18 @@ function removeBadHabit(habitId) {
 }
 
 function buildTaskCard(task) {
-  const color = taskColor(task);
+  const now = Date.now();
+  const color = taskColor(task, now);
   const active = task.status === "active";
+  const paused = task.status === "paused";
   const scheduled = task.status === "scheduled";
-  const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - Date.now();
-  const remainingRatio = active ? Math.min(1, Math.max(0, remaining / task.durationMs)) : 0;
+  const remaining = getTaskRemainingMs(task, now);
+  const elapsedMs = getTaskElapsedMs(task, now);
+  const overtimeMs = task.overtimeAccepted ? Math.max(0, elapsedMs - task.durationMs) : 0;
+  const remainingRatio = active || paused ? Math.min(1, Math.max(0, remaining / task.durationMs)) : 0;
   const card = makeElement(
     "article",
-    `task-card tone-${color}${task.status === "done" ? " is-finished" : ""}${task.status === "missed" ? " is-missed" : ""}`
+    `task-card tone-${color}${task.status === "done" ? " is-finished" : ""}${task.status === "missed" ? " is-missed" : ""}${paused ? " is-paused" : ""}`
   );
   card.id = `task-${task.id}`;
   card.dataset.taskId = task.id;
@@ -605,10 +878,24 @@ function buildTaskCard(task) {
       dateStyle: "medium",
       timeStyle: "short",
     })}`;
+  } else if (task.overtimeAccepted && overtimeMs > 0) {
+    timer.classList.add("is-overtime");
+    timer.textContent = `${formatDuration(task.durationMs)} scheduled + ${formatDuration(overtimeMs)} overtime`;
+  } else if (paused) {
+    timer.classList.add("is-paused");
+    timer.textContent = remaining > 0
+      ? `Paused · ${formatDuration(remaining)} left`
+      : `Paused · ${formatDuration(-remaining)} over`;
   } else if (active) {
-    timer.textContent = remaining > 0 ? `${formatDuration(remaining)} left` : `${formatDuration(-remaining)} overdue`;
+    timer.textContent = remaining > 0
+      ? `${formatDuration(remaining)} left`
+      : task.habitId && !task.overtimeDeclined
+        ? "Scheduled time reached"
+        : `${formatDuration(-remaining)} overdue`;
   } else if (task.status === "done") {
-    timer.textContent = `Finished in ${colorLabel(color).toLowerCase()} time`;
+    timer.textContent = overtimeMs > 0
+      ? `${formatDuration(task.durationMs)} scheduled + ${formatDuration(overtimeMs)} overtime`
+      : `Finished in ${colorLabel(color).toLowerCase()} time`;
   } else {
     timer.textContent = "Not finished today";
   }
@@ -620,8 +907,10 @@ function buildTaskCard(task) {
   badge.tabIndex = 0;
   badge.textContent = scheduled
     ? "Scheduled"
-    : active
-      ? remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`
+    : paused
+      ? "Paused"
+      : active
+        ? remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`
       : task.status === "done" ? `Done · ${colorLabel(color)}` : "Missed · Gray";
   badge.setAttribute("aria-label", `${badge.textContent}. ${badge.dataset.tooltip}`);
   meta.append(badge);
@@ -643,12 +932,27 @@ function buildTaskCard(task) {
   card.append(main);
 
   const actions = makeElement("div", "task-actions");
-  if (active) {
+  if (active || paused) {
     const done = makeElement("button", "done-button", "Done");
     done.type = "button";
     done.setAttribute("aria-label", `Mark ${task.name} complete`);
     done.addEventListener("click", () => finishTask(task.id));
     actions.append(done);
+    const timerControl = makeElement(
+      "button",
+      "task-control-button",
+      paused ? "Resume" : "Pause"
+    );
+    timerControl.type = "button";
+    timerControl.setAttribute("aria-label", `${paused ? "Resume" : "Pause"} ${task.name}`);
+    timerControl.addEventListener("click", () => {
+      if (paused) {
+        resumeTask(task.id);
+      } else {
+        pauseTask(task.id);
+      }
+    });
+    actions.append(timerControl);
   }
   const edit = makeElement("button", "icon-button", "✎");
   edit.type = "button";
@@ -658,7 +962,7 @@ function buildTaskCard(task) {
 
   const remove = makeElement("button", "icon-button", "×");
   remove.type = "button";
-  remove.setAttribute("aria-label", `Remove ${task.name}`);
+  remove.setAttribute("aria-label", `${active || paused ? "Cancel" : "Remove"} ${task.name}`);
   remove.addEventListener("click", () => removeTask(task.id));
   actions.append(remove);
   card.append(actions);
@@ -670,6 +974,10 @@ function buildRoutineItem(habit) {
   const info = makeElement("div", "routine-info");
   info.append(makeElement("p", "routine-name", habit.name));
   info.append(makeElement("span", "routine-time", `${habit.minutes} min · daily`));
+  const totals = getHabitTimeTotals(habit.id);
+  const total = makeElement("span", "routine-state", `${formatHabitTime(totals.elapsedMs)} total`);
+  total.dataset.habitRoutineTotal = habit.id;
+  info.append(total);
   item.append(info);
 
   const todayTask = state.tasks.find((task) => task.habitId === habit.id && task.status !== "missed");
@@ -678,7 +986,9 @@ function buildRoutineItem(habit) {
   if (todayTask) {
     button.textContent = todayTask.status === "done"
       ? "Done today"
-      : todayTask.status === "scheduled" ? "Scheduled" : "In progress";
+      : todayTask.status === "scheduled"
+        ? "Scheduled"
+        : todayTask.status === "paused" ? "Paused" : "In progress";
     button.disabled = true;
   } else {
     button.textContent = "Start today";
@@ -812,62 +1122,36 @@ function buildBadHabitItem(habit) {
   return item;
 }
 
-function renderYesterday() {
-  const panel = document.querySelector("#yesterday-panel");
-  const list = document.querySelector("#yesterday-list");
+function renderHabitTimeList() {
+  const list = document.querySelector("#habit-time-list");
+  const empty = document.querySelector("#habit-time-empty");
   list.replaceChildren();
-  const previousDay = state.history[0];
-  if (!previousDay || (previousDay.tasks.length === 0 && !(previousDay.badHabits || []).length)) {
-    panel.hidden = true;
-    return;
-  }
-  panel.hidden = false;
-  const date = new Date(`${previousDay.dayKey}T12:00:00`);
-  document.querySelector("#yesterday-title").textContent = date.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
-  const previousItems = previousDay.tasks.map((task) => {
-    const color = task.status === "done" ? task.outcome || "gray" : "gray";
-    return {
-      name: task.name,
-      color,
-      label: task.status === "done" ? `Done · ${colorLabel(color)}` : "Missed · Gray",
-    };
-  });
-  for (const habit of previousDay.badHabits || []) {
-    const color = habit.avoided ? "green" : "gray";
-    previousItems.push({
-      name: habit.name,
-      color,
-      label: habit.avoided
-        ? "Avoided · Green"
-        : habit.checkedIn ? "Checked in · A new chance tomorrow" : "No check-in · Gray",
-    });
-  }
-  for (const item of previousItems.slice(0, 5)) {
-    const row = makeElement("div", "yesterday-item");
-    row.append(makeElement("span", "", item.name));
-    const badge = makeElement("span", `status-badge status-${item.color}`, item.label);
-    badge.tabIndex = 0;
-    badge.dataset.tooltip = taskMessage(item.color);
-    badge.setAttribute("aria-label", `${badge.textContent}. ${badge.dataset.tooltip}`);
-    row.append(badge);
+  empty.hidden = state.habits.length > 0;
+  for (const habit of state.habits) {
+    const totals = getHabitTimeTotals(habit.id);
+    const row = makeElement("div", "habit-time-item");
+    row.append(makeElement("span", "habit-time-name", habit.name));
+    const total = makeElement("span", "habit-time-total", `${formatHabitTime(totals.elapsedMs)} total`);
+    total.dataset.habitTotalFor = habit.id;
+    const details = makeElement("span", "habit-time-overtime");
+    if (totals.overtimeMs > 0) {
+      details.textContent = `${formatDuration(totals.overtimeMs)} overtime`;
+    }
+    details.dataset.habitOvertimeFor = habit.id;
+    const values = makeElement("div");
+    values.append(total);
+    values.append(details);
+    row.append(values);
     list.append(row);
-  }
-  if (previousItems.length > 5) {
-    list.append(makeElement("p", "form-hint", `And ${previousItems.length - 5} more from that day.`));
   }
 }
 
 function updateSummary() {
   const doneTasks = state.tasks.filter((task) => task.status === "done").length;
-  const activeTasks = state.tasks.filter((task) => task.status === "active").length;
-  const resisted = state.badHabits.filter((habit) => habit.avoided).length;
+  const activeTasks = state.tasks.filter((task) => task.status === "active" || task.status === "paused").length;
   document.querySelector("#done-count").textContent = String(doneTasks);
   document.querySelector("#active-count").textContent = String(activeTasks);
-  document.querySelector("#resisted-count").textContent = String(resisted);
+  document.querySelector("#habit-count").textContent = String(state.habits.length);
 }
 
 function getStreakSummary() {
@@ -907,23 +1191,25 @@ function getStreakSummary() {
 }
 
 function renderStreak() {
-  const message = document.querySelector("#streak-message");
+  const card = document.querySelector("#streak-card");
+  const bar = document.querySelector("#summary-bar");
   const streak = state.habits.length > 0 ? getStreakSummary() : null;
+  bar.classList.toggle("has-streak", Boolean(streak));
   if (!streak) {
-    message.hidden = true;
-    message.textContent = "";
+    card.hidden = true;
+    previousStreakCount = 0;
     return;
   }
-  if (!streak.current) {
-    message.textContent = `Fresh start today · Best streak: ${streak.best} ${streak.best === 1 ? "day" : "days"}.`;
-  } else {
-    const currentText = `${streak.current} ${streak.current === 1 ? "day" : "days"} in a row`;
-    const bestText = `${streak.best} ${streak.best === 1 ? "day" : "days"}`;
-    message.textContent = streak.completedToday
-      ? `${currentText} · Best: ${bestText}.`
-      : `${currentText} · Ready when you are · Best: ${bestText}.`;
+  card.hidden = false;
+  document.querySelector("#streak-value").textContent = String(streak.current);
+  document.querySelector("#streak-best").textContent =
+    `Best: ${streak.best} ${streak.best === 1 ? "day" : "days"}`;
+  if (previousStreakCount !== null && streak.current > previousStreakCount) {
+    card.classList.remove("is-increasing");
+    void card.offsetWidth;
+    card.classList.add("is-increasing");
   }
-  message.hidden = false;
+  previousStreakCount = streak.current;
 }
 
 function showCompletionMessage() {
@@ -957,7 +1243,7 @@ function render() {
   badHabitList.replaceChildren(...state.badHabits.map(buildBadHabitItem));
   document.querySelector("#bad-habit-empty").hidden = state.badHabits.length > 0;
   updateSummary();
-  renderYesterday();
+  renderHabitTimeList();
 
   const soundToggle = document.querySelector("#sound-toggle");
   soundToggle.setAttribute("aria-pressed", String(state.soundOn));
@@ -966,25 +1252,50 @@ function render() {
 }
 
 function updateLiveTimers() {
+  if (currentUser && !accountReady) {
+    return;
+  }
+  const now = Date.now();
   for (const task of state.tasks) {
-    if (task.status !== "active") {
+    if (task.status !== "active" && task.status !== "paused") {
       continue;
     }
-    const remaining = (task.scheduledAt ?? task.createdAt) + task.durationMs - Date.now();
-    const color = taskColor(task);
+    const remaining = getTaskRemainingMs(task, now);
+    const elapsedMs = getTaskElapsedMs(task, now);
+    const overtimeMs = task.overtimeAccepted ? Math.max(0, elapsedMs - task.durationMs) : 0;
+    const color = taskColor(task, now);
     const card = document.querySelector(`#task-${CSS.escape(task.id)}`);
     if (!card) {
       continue;
     }
-    card.classList.remove("tone-green", "tone-yellow", "tone-red");
+    card.classList.remove("tone-green", "tone-yellow", "tone-red", "is-paused");
     card.classList.add(`tone-${color}`);
+    if (task.status === "paused") {
+      card.classList.add("is-paused");
+    }
 
     const timer = card.querySelector(`[data-timer-for="${CSS.escape(task.id)}"]`);
-    timer.textContent = remaining > 0 ? `${formatDuration(remaining)} left` : `${formatDuration(-remaining)} overdue`;
+    timer.classList.toggle("is-paused", task.status === "paused");
+    timer.classList.toggle("is-overtime", task.overtimeAccepted && overtimeMs > 0);
+    if (task.overtimeAccepted && overtimeMs > 0) {
+      timer.textContent = `${formatDuration(task.durationMs)} scheduled + ${formatDuration(overtimeMs)} overtime`;
+    } else if (task.status === "paused") {
+      timer.textContent = remaining > 0
+        ? `Paused · ${formatDuration(remaining)} left`
+        : `Paused · ${formatDuration(-remaining)} over`;
+    } else {
+      timer.textContent = remaining > 0
+        ? `${formatDuration(remaining)} left`
+        : task.habitId && !task.overtimeDeclined
+          ? "Scheduled time reached"
+          : `${formatDuration(-remaining)} overdue`;
+    }
 
     const badge = card.querySelector(`[data-status-for="${CSS.escape(task.id)}"]`);
     badge.className = `status-badge status-${color}`;
-    badge.textContent = remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`;
+    badge.textContent = task.status === "paused"
+      ? "Paused"
+      : remaining <= 0 ? "Overdue" : `${colorLabel(color)} zone`;
     badge.dataset.tooltip = taskMessage(color);
     badge.setAttribute("aria-label", `${badge.textContent}. ${badge.dataset.tooltip}`);
 
@@ -993,20 +1304,93 @@ function updateLiveTimers() {
     fill.style.width = `${ratio * 100}%`;
     card.querySelector('[role="progressbar"]').setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
   }
+  updateHabitTimeDisplays(now);
+  showPendingOvertimePrompt(now);
+}
+
+function updateHabitTimeDisplays(now) {
+  for (const habit of state.habits) {
+    const totals = getHabitTimeTotals(habit.id, now);
+    const formattedTotal = `${formatHabitTime(totals.elapsedMs)} total`;
+    const routineTotal = document.querySelector(`[data-habit-routine-total="${CSS.escape(habit.id)}"]`);
+    if (routineTotal) {
+      routineTotal.textContent = formattedTotal;
+    }
+    const total = document.querySelector(`[data-habit-total-for="${CSS.escape(habit.id)}"]`);
+    if (total) {
+      total.textContent = formattedTotal;
+    }
+    const overtime = document.querySelector(`[data-habit-overtime-for="${CSS.escape(habit.id)}"]`);
+    if (overtime) {
+      overtime.textContent = totals.overtimeMs > 0
+        ? `${formatDuration(totals.overtimeMs)} overtime`
+        : "";
+    }
+  }
+}
+
+function showPendingOvertimePrompt(now = Date.now()) {
+  if (pendingOvertimeTaskId || overtimeDialog.open || (currentUser && !accountReady)) {
+    return;
+  }
+  const task = state.tasks.find((item) =>
+    item.status === "active" &&
+    item.habitId &&
+    !item.overtimeAccepted &&
+    !item.overtimeDeclined &&
+    getTaskRemainingMs(item, now) <= 0
+  );
+  if (!task) {
+    return;
+  }
+  pendingOvertimeTaskId = task.id;
+  openDialog(overtimeDialog);
+  document.querySelector("#continue-overtime").focus();
+}
+
+function resolveOvertime(continueTracking) {
+  const task = state.tasks.find((item) => item.id === pendingOvertimeTaskId);
+  pendingOvertimeTaskId = null;
+  overtimeDialog.close();
+  if (!task || task.status !== "active") {
+    return;
+  }
+  if (continueTracking) {
+    task.overtimeAccepted = true;
+    commitTaskTime(task);
+    saveState();
+    render();
+    return;
+  }
+
+  task.elapsedMs = Math.min(getTaskElapsedMs(task), task.durationMs);
+  task.lastResumedAt = null;
+  task.status = "paused";
+  task.overtimeDeclined = true;
+  finishTask(task.id);
 }
 
 function archiveCurrentDay(newDayKey) {
   const now = Date.now();
   const carriedTasks = state.tasks.filter((task) =>
-    task.status === "scheduled" &&
-    (task.scheduledAt > now || todayKey(new Date(task.scheduledAt)) === newDayKey)
+    (task.status === "scheduled" &&
+      (task.scheduledAt > now || todayKey(new Date(task.scheduledAt)) === newDayKey)) ||
+    (task.habitId && (task.status === "active" || task.status === "paused"))
   ).map((task) => Object.assign({}, task, {
-    status: task.scheduledAt <= now ? "active" : task.status,
+    status: task.status === "scheduled" && task.scheduledAt <= now ? "active" : task.status,
+    lastResumedAt: task.status === "scheduled" && task.scheduledAt <= now ? task.scheduledAt : task.lastResumedAt,
   }));
+  const carriedTaskIds = new Set(carriedTasks.map((task) => task.id));
+  for (const task of state.tasks) {
+    if (!carriedTaskIds.has(task.id) && (task.status === "active" || task.status === "paused")) {
+      commitTaskTime(task, now);
+      task.lastResumedAt = null;
+    }
+  }
   const previousTasks = state.tasks.filter((task) => !carriedTasks.some((carried) => carried.id === task.id)).map((task) =>
     Object.assign({}, task, {
-      status: task.status === "active" || task.status === "scheduled" ? "missed" : task.status,
-      outcome: task.status === "active" || task.status === "scheduled" ? "gray" : task.outcome,
+      status: task.status === "active" || task.status === "paused" || task.status === "scheduled" ? "missed" : task.status,
+      outcome: task.status === "active" || task.status === "paused" || task.status === "scheduled" ? "gray" : task.outcome,
     })
   );
   const previousBadHabits = state.badHabits.map((habit) => ({
@@ -1050,6 +1434,8 @@ function activateDueTasks() {
   for (const task of state.tasks) {
     if (task.status === "scheduled" && task.scheduledAt <= now) {
       task.status = "active";
+      task.lastResumedAt = task.scheduledAt;
+      task.sessionDayKey = task.sessionDayKey || state.dayKey;
       changed = true;
     }
   }
@@ -1147,12 +1533,69 @@ async function playSound(kind) {
   }
 }
 
+function renderNextQuote() {
+  if (
+    !Array.isArray(QUOTES) ||
+    QUOTES.length !== 100 ||
+    QUOTES.some((quote) => !quote || typeof quote.text !== "string" || typeof quote.source !== "string")
+  ) {
+    console.error("The motivational quote catalog must contain exactly 100 attributed entries.");
+    showNotice("The encouragement quotes couldn’t be loaded. Your board is still available.");
+    return;
+  }
+
+  let previousIndex = currentQuoteIndex;
+  if (previousIndex === null) {
+    try {
+      const savedIndex = localStorage.getItem("steady-last-quote-index-v1");
+      const storedIndex = savedIndex === null ? NaN : Number(savedIndex);
+      previousIndex = Number.isInteger(storedIndex) ? storedIndex : null;
+    } catch (error) {
+      console.error("Could not read the previous quote choice.", error);
+    }
+  }
+  const options = QUOTES.map((_quote, index) => index)
+    .filter((index) => index !== previousIndex);
+  currentQuoteIndex = options[Math.floor(Math.random() * options.length)];
+  const quote = QUOTES[currentQuoteIndex];
+  document.querySelector("#quote-text").textContent = quote.text;
+  document.querySelector("#quote-source").textContent = quote.source;
+  try {
+    localStorage.setItem("steady-last-quote-index-v1", String(currentQuoteIndex));
+  } catch (error) {
+    console.error("Could not remember the previous quote choice.", error);
+    showNotice("Your quote changed, but this browser couldn’t remember it for next time.");
+  }
+}
+
+function initializeSummaryBar() {
+  const sentinel = document.querySelector("#summary-sentinel");
+  const summaryBar = document.querySelector("#summary-bar");
+  const updateCompactState = () => {
+    summaryBar.classList.toggle("is-compact", sentinel.getBoundingClientRect().top < 0);
+  };
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver(updateCompactState, { threshold: 0 });
+    observer.observe(sentinel);
+  } else {
+    window.addEventListener("scroll", updateCompactState, { passive: true });
+    updateCompactState();
+  }
+}
+
 function openDialog(dialog) {
   if (typeof dialog.showModal === "function") {
     dialog.showModal();
   } else {
-    showNotice("This browser does not support the add-task dialog. Please try a current browser.");
+    showNotice("This browser does not support dialogs. Please try a current browser.");
   }
+}
+
+function updateTaskTypeSelection() {
+  document.querySelectorAll(".task-type-option").forEach((option) => {
+    const radio = option.querySelector('input[type="radio"]');
+    option.classList.toggle("is-selected", radio.checked);
+  });
 }
 
 function openNewTaskDialog() {
@@ -1161,11 +1604,13 @@ function openNewTaskDialog() {
   taskTimeSelected = true;
   const form = document.querySelector("#task-form");
   form.reset();
+  document.querySelector("#task-type-fieldset").hidden = false;
+  document.querySelector("#task-type-error").hidden = true;
+  updateTaskTypeSelection();
   document.querySelector("#task-time-control").hidden = false;
   document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-dialog-title").textContent = "Add a task";
   form.querySelector('[type="submit"]').textContent = "Add to today";
-  document.querySelector("#save-as-habit-row").hidden = false;
   document.querySelector("#task-form-hint").hidden = false;
   setTaskTime(suggestedTaskTime());
   openDialog(taskDialog);
@@ -1184,11 +1629,12 @@ function openTaskEditor(taskId) {
   form.elements.minutes.value = String(task.minutes);
   document.querySelector("#task-time-control").hidden = false;
   document.querySelector("#task-time-picker").hidden = true;
+  document.querySelector("#task-type-fieldset").hidden = true;
+  document.querySelector("#task-type-error").hidden = true;
   document.querySelector("#task-form-hint").hidden = false;
   setTaskTime(task.scheduledAt || suggestedTaskTime());
   document.querySelector("#task-dialog-title").textContent = "Edit task";
   form.querySelector('[type="submit"]').textContent = "Save changes";
-  document.querySelector("#save-as-habit-row").hidden = true;
   openDialog(taskDialog);
 }
 
@@ -1233,9 +1679,10 @@ function openHabitEditor(habitId) {
   form.elements.minutes.value = String(habit.minutes);
   document.querySelector("#task-time-control").hidden = true;
   document.querySelector("#task-time-picker").hidden = true;
+  document.querySelector("#task-type-fieldset").hidden = true;
+  document.querySelector("#task-type-error").hidden = true;
   document.querySelector("#task-dialog-title").textContent = "Edit daily habit";
   form.querySelector('[type="submit"]').textContent = "Save changes";
-  document.querySelector("#save-as-habit-row").hidden = true;
   document.querySelector("#task-form-hint").hidden = true;
   openDialog(taskDialog);
 }
@@ -1588,6 +2035,12 @@ document.querySelector("#sign-out").addEventListener("click", async () => {
 document.querySelector("#open-task-dialog").addEventListener("click", openNewTaskDialog);
 document.querySelector("#empty-add-task").addEventListener("click", openNewTaskDialog);
 document.querySelector("#open-bad-dialog").addEventListener("click", openNewBadHabitDialog);
+document.querySelectorAll('input[name="taskType"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    document.querySelector("#task-type-error").hidden = true;
+    updateTaskTypeSelection();
+  });
+});
 document.querySelector("#suggested-task-time").addEventListener("click", () => {
   taskTimeSelected = true;
   document.querySelector("#task-time-picker").hidden = true;
@@ -1613,6 +2066,19 @@ document.querySelector("#undo-delete-habit").addEventListener("click", undoRemov
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
 });
+document.querySelector("#keep-task-going").addEventListener("click", () => cancelTaskDialog.close());
+document.querySelector("#confirm-cancel-task").addEventListener("click", confirmCancelTask);
+cancelTaskDialog.addEventListener("close", () => {
+  pendingCancelTaskId = null;
+});
+cancelTaskDialog.addEventListener("click", (event) => {
+  if (event.target === cancelTaskDialog) {
+    cancelTaskDialog.close();
+  }
+});
+document.querySelector("#continue-overtime").addEventListener("click", () => resolveOvertime(true));
+document.querySelector("#finish-overtime").addEventListener("click", () => resolveOvertime(false));
+overtimeDialog.addEventListener("cancel", (event) => event.preventDefault());
 
 document.querySelector("#task-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1622,6 +2088,7 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
   }
   const name = form.elements.name.value.trim();
   const minutes = Number(form.elements.minutes.value);
+  const taskType = form.elements.taskType.value;
   const scheduledAt = taskTimeSelected ? parseLocalDateTime(form.elements.startAt.value) : null;
   if (!name || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
     showNotice("Add a task name and a duration between 1 and 1,440 minutes.");
@@ -1631,16 +2098,23 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
     showNotice("Choose a valid local date and time for this task.");
     return;
   }
+  if (!editingHabitId && !editingTaskId && !taskType) {
+    document.querySelector("#task-type-error").hidden = false;
+    form.querySelector('input[name="taskType"]').focus();
+    return;
+  }
   if (editingHabitId) {
     updateHabit(editingHabitId, name, minutes);
   } else if (editingTaskId) {
     updateTask(editingTaskId, { name, minutes, scheduledAt });
   } else {
-    createTask({ name, minutes, scheduledAt, saveAsHabit: form.elements.saveAsHabit.checked });
+    createTask({ name, minutes, scheduledAt, saveAsHabit: taskType === "habit" });
   }
   editingTaskId = null;
   editingHabitId = null;
   form.reset();
+  document.querySelector("#task-type-error").hidden = true;
+  updateTaskTypeSelection();
   taskDialog.close();
 });
 
@@ -1671,11 +2145,7 @@ document.querySelector("#sound-toggle").addEventListener("click", () => {
   render();
 });
 
-document.querySelector("#new-quote").addEventListener("click", () => {
-  const current = document.querySelector("#quote-text").textContent;
-  const options = QUOTES.filter((quote) => quote !== current);
-  document.querySelector("#quote-text").textContent = options[Math.floor(Math.random() * options.length)];
-});
+document.querySelector("#new-quote").addEventListener("click", renderNextQuote);
 
 document.addEventListener("pointerover", (event) => {
   const badge = event.target.closest(".status-badge[data-tooltip]");
@@ -1685,8 +2155,9 @@ document.addEventListener("pointerover", (event) => {
   }
 });
 
-document.querySelector("#quote-text").textContent = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+renderNextQuote();
 renderAccountControls();
+initializeSummaryBar();
 void initializeAccount().then(() => {
   if (currentUser && !accountReady) {
     return;
@@ -1694,6 +2165,7 @@ void initializeAccount().then(() => {
   checkDayBoundary();
   activateDueTasks();
   render();
+  updateLiveTimers();
 });
 window.setInterval(() => {
   activateDueTasks();
