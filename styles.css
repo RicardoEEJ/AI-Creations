@@ -29,6 +29,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));
   background:
     radial-gradient(ellipse at 86% 4%, rgb(77 118 92 / 11%), transparent 27rem),
     radial-gradient(ellipse at 4% 42%, rgb(87 81 126 / 8%), transparent 25rem),
@@ -55,6 +56,64 @@ input:focus-visible,
 .page-shell {
   width: min(1120px, calc(100% - 48px));
   margin: 0 auto;
+}
+
+.bottom-tabs {
+  position: fixed;
+  z-index: 30;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: rgb(16 19 18 / 96%);
+  box-shadow: 0 -12px 30px rgb(0 0 0 / 20%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.tab-button {
+  display: flex;
+  min-width: 0;
+  min-height: 52px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab-button[aria-current="page"] {
+  border-color: rgb(131 214 165 / 22%);
+  background: rgb(131 214 165 / 10%);
+  color: var(--green);
+}
+
+.tab-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.bank-placeholder {
+  margin-top: 24px;
+  padding: 30px;
+}
+
+.bank-placeholder h2,
+.bank-placeholder p:last-child {
+  margin-bottom: 8px;
 }
 
 .topbar {

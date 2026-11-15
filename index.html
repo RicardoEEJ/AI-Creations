@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta
       name="description"
       content="A gentle, visual space for building habits and making time for what matters."
@@ -40,6 +40,7 @@
       <div class="storage-notice" id="storage-notice" role="status" hidden></div>
 
       <main>
+        <section class="app-view" id="today-view" data-app-view="today" aria-labelledby="welcome-title">
         <section class="welcome-row" aria-labelledby="welcome-title">
           <div class="welcome-copy">
             <p class="eyebrow"><span class="eyebrow-dot"></span> A LITTLE SPACE TO RESET</p>
@@ -90,7 +91,9 @@
             </article>
           </div>
         </section>
+        </section>
 
+        <section class="app-view" id="tasks-view" data-app-view="tasks" aria-labelledby="tasks-title" hidden>
         <div class="content-grid">
           <div class="main-column">
             <section class="panel tasks-panel" aria-labelledby="tasks-title">
@@ -115,7 +118,27 @@
                 Colors show how much of your time is left. Hover or focus a color for a kind word.
               </p>
             </section>
+          </div>
 
+          <aside class="side-column">
+            <section class="panel color-guide" aria-labelledby="guide-title">
+              <p class="eyebrow">YOUR COLOR GUIDE</p>
+              <h2 id="guide-title">A quick glance, not a grade.</h2>
+              <ul class="legend-list">
+                <li><span class="legend-dot dot-green"></span><span><strong>Green</strong> · more than half your time</span></li>
+                <li><span class="legend-dot dot-yellow"></span><span><strong>Yellow</strong> · getting closer</span></li>
+                <li><span class="legend-dot dot-red"></span><span><strong>Red</strong> · nearly up or overdue</span></li>
+                <li><span class="legend-dot dot-gray"></span><span><strong>Gray</strong> · left for another day</span></li>
+              </ul>
+              <p class="guide-note">Every small step still counts.</p>
+            </section>
+          </aside>
+        </div>
+        </section>
+
+        <section class="app-view" id="habits-view" data-app-view="habits" aria-labelledby="routines-title" hidden>
+        <div class="content-grid">
+          <div class="main-column">
             <section class="panel routines-panel" aria-labelledby="routines-title">
               <div class="section-heading">
                 <div>
@@ -155,19 +178,6 @@
                 Small changes count. Add a habit whenever you’re ready.
               </div>
             </section>
-
-            <section class="panel color-guide" aria-labelledby="guide-title">
-              <p class="eyebrow">YOUR COLOR GUIDE</p>
-              <h2 id="guide-title">A quick glance, not a grade.</h2>
-              <ul class="legend-list">
-                <li><span class="legend-dot dot-green"></span><span><strong>Green</strong> · more than half your time</span></li>
-                <li><span class="legend-dot dot-yellow"></span><span><strong>Yellow</strong> · getting closer</span></li>
-                <li><span class="legend-dot dot-red"></span><span><strong>Red</strong> · nearly up or overdue</span></li>
-                <li><span class="legend-dot dot-gray"></span><span><strong>Gray</strong> · left for another day</span></li>
-              </ul>
-              <p class="guide-note">Every small step still counts.</p>
-            </section>
-
             <section class="panel habit-time-panel" aria-labelledby="habit-time-title">
               <p class="eyebrow">EVERY MINUTE COUNTS</p>
               <h2 id="habit-time-title">Time you’ve given your habits</h2>
@@ -177,6 +187,15 @@
             </section>
           </aside>
         </div>
+        </section>
+
+        <section class="app-view" id="bank-view" data-app-view="bank" aria-labelledby="bank-title" hidden>
+          <section class="panel bank-placeholder">
+            <p class="eyebrow">A LITTLE SOMETHING TO LOOK FORWARD TO</p>
+            <h2 id="bank-title">Your Bank</h2>
+            <p class="section-description">Coming soon.</p>
+          </section>
+        </section>
       </main>
 
       <footer class="page-footer">
@@ -184,6 +203,25 @@
         <span id="save-status">Saved on this device</span>
       </footer>
     </div>
+
+    <nav class="bottom-tabs" aria-label="Main navigation">
+      <button class="tab-button" type="button" data-tab="today" aria-controls="today-view" aria-current="page">
+        <span class="tab-icon" aria-hidden="true">⌂</span>
+        <span>Today</span>
+      </button>
+      <button class="tab-button" type="button" data-tab="habits" aria-controls="habits-view">
+        <span class="tab-icon" aria-hidden="true">♡</span>
+        <span>Habits</span>
+      </button>
+      <button class="tab-button" type="button" data-tab="tasks" aria-controls="tasks-view">
+        <span class="tab-icon" aria-hidden="true">✓</span>
+        <span>Tasks</span>
+      </button>
+      <button class="tab-button" type="button" data-tab="bank" aria-controls="bank-view">
+        <span class="tab-icon" aria-hidden="true">▣</span>
+        <span>Bank</span>
+      </button>
+    </nav>
 
     <dialog class="form-dialog" id="task-dialog" aria-labelledby="task-dialog-title">
       <form id="task-form">

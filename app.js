@@ -1,6 +1,8 @@
 const STORAGE_KEY = "steady-habit-board-v1";
 const STATE_VERSION = 6;
 const HABIT_UNDO_DURATION_MS = 9000;
+const TAB_STORAGE_KEY = "steady-active-tab-v1";
+const APP_TABS = new Set(["today", "habits", "tasks", "bank"]);
 const COLOR_MESSAGES = {
   green: [
     "You made time for what matters. That counts.",
@@ -35,6 +37,8 @@ const routineList = document.querySelector("#routine-list");
 const badHabitList = document.querySelector("#bad-habit-list");
 const notice = document.querySelector("#storage-notice");
 const saveStatus = document.querySelector("#save-status");
+const tabButtons = [...document.querySelectorAll(".tab-button")];
+const appViews = [...document.querySelectorAll("[data-app-view]")];
 const accountDialog = document.querySelector("#account-dialog");
 const accountButton = document.querySelector("#account-button");
 const accountForm = document.querySelector("#account-form");
@@ -117,6 +121,43 @@ function makeDefaultState() {
 function showNotice(message) {
   notice.textContent = message;
   notice.hidden = false;
+}
+
+function loadActiveTab() {
+  try {
+    const savedTab = localStorage.getItem(TAB_STORAGE_KEY);
+    return APP_TABS.has(savedTab) ? savedTab : "today";
+  } catch (error) {
+    console.error("Could not read the last active tab.", error);
+    showNotice("Your last tab couldn’t be restored. The Today tab is open.");
+    return "today";
+  }
+}
+
+function activateTab(tab, shouldSave = true) {
+  if (!APP_TABS.has(tab)) {
+    return;
+  }
+
+  appViews.forEach((view) => {
+    view.hidden = view.dataset.appView !== tab;
+  });
+  tabButtons.forEach((button) => {
+    if (button.dataset.tab === tab) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  });
+
+  if (shouldSave) {
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, tab);
+    } catch (error) {
+      console.error("Could not save the last active tab.", error);
+      showNotice("Your tab changed, but this browser couldn’t remember it for next time.");
+    }
+  }
 }
 
 function setSaveStatus(message) {
@@ -2146,6 +2187,11 @@ document.querySelector("#sound-toggle").addEventListener("click", () => {
 });
 
 document.querySelector("#new-quote").addEventListener("click", renderNextQuote);
+
+tabButtons.forEach((button) => {
+  button.addEventListener("click", () => activateTab(button.dataset.tab));
+});
+activateTab(loadActiveTab(), false);
 
 document.addEventListener("pointerover", (event) => {
   const badge = event.target.closest(".status-badge[data-tooltip]");
