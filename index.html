@@ -103,7 +103,7 @@
                   <h2 id="tasks-title">Today’s tasks</h2>
                 </div>
                 <button class="button button-primary" id="open-task-dialog" type="button">
-                  <span aria-hidden="true">+</span> Add a task
+                  <span aria-hidden="true">+</span> Add task
                 </button>
               </div>
 
@@ -145,7 +145,12 @@
                   <p class="eyebrow">READY WHEN YOU ARE</p>
                   <h2 id="routines-title">Daily habits</h2>
                 </div>
-                <span class="section-count" id="routine-count">0 saved</span>
+                <div class="section-heading-actions">
+                  <span class="section-count" id="routine-count">0 saved</span>
+                  <button class="button button-primary" id="open-habit-dialog" type="button">
+                    <span aria-hidden="true">+</span> Add habit
+                  </button>
+                </div>
               </div>
               <p class="section-description">
                 Your saved habits are here whenever you want to make time for them today.
@@ -251,26 +256,10 @@
             <button class="text-button change-time-button" id="confirm-task-time" type="button">Use this time</button>
           </div>
         </div>
-        <fieldset class="task-type-fieldset" id="task-type-fieldset" aria-describedby="task-type-error">
-          <legend>What kind of task is this?</legend>
-          <div class="task-type-options">
-            <label class="task-type-option">
-              <input type="radio" name="taskType" value="habit" />
-              <span class="task-type-title">Daily Habit</span>
-              <span class="task-type-description">A routine you’d like to return to each day.</span>
-            </label>
-            <label class="task-type-option">
-              <input type="radio" name="taskType" value="one-time" />
-              <span class="task-type-title">One-Time Task</span>
-              <span class="task-type-description">Something just for the selected day.</span>
-            </label>
-          </div>
-          <p class="task-type-error" id="task-type-error" role="alert" hidden>Pick one: is this a daily habit or just for today?</p>
-        </fieldset>
         <p class="form-hint" id="task-form-hint">Your timer begins when the selected time arrives.</p>
         <div class="dialog-actions">
           <button class="button button-secondary" type="button" data-close-dialog="task-dialog">Cancel</button>
-          <button class="button button-primary" type="submit">Add to today</button>
+          <button class="button button-primary" type="submit">Add task</button>
         </div>
       </form>
     </dialog>

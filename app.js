@@ -67,6 +67,7 @@ if (hasSupabaseConfig) {
 let activePauseId = null;
 let editingTaskId = null;
 let editingHabitId = null;
+let taskDialogEntryType = "task";
 let taskTimeSelected = true;
 let editingBadHabitId = null;
 let audioContext = null;
@@ -1632,28 +1633,29 @@ function openDialog(dialog) {
   }
 }
 
-function updateTaskTypeSelection() {
-  document.querySelectorAll(".task-type-option").forEach((option) => {
-    const radio = option.querySelector('input[type="radio"]');
-    option.classList.toggle("is-selected", radio.checked);
-  });
+function openNewTaskDialog() {
+  openNewEntryDialog("task");
 }
 
-function openNewTaskDialog() {
+function openNewHabitDialog() {
+  openNewEntryDialog("habit");
+}
+
+function openNewEntryDialog(entryType) {
   editingTaskId = null;
   editingHabitId = null;
-  taskTimeSelected = true;
+  taskDialogEntryType = entryType;
+  taskTimeSelected = entryType === "task";
   const form = document.querySelector("#task-form");
   form.reset();
-  document.querySelector("#task-type-fieldset").hidden = false;
-  document.querySelector("#task-type-error").hidden = true;
-  updateTaskTypeSelection();
-  document.querySelector("#task-time-control").hidden = false;
+  document.querySelector("#task-time-control").hidden = entryType === "habit";
   document.querySelector("#task-time-picker").hidden = true;
-  document.querySelector("#task-dialog-title").textContent = "Add a task";
-  form.querySelector('[type="submit"]').textContent = "Add to today";
-  document.querySelector("#task-form-hint").hidden = false;
-  setTaskTime(suggestedTaskTime());
+  document.querySelector("#task-dialog-title").textContent = `Add ${entryType}`;
+  form.querySelector('[type="submit"]').textContent = `Add ${entryType}`;
+  document.querySelector("#task-form-hint").hidden = entryType === "habit";
+  if (entryType === "task") {
+    setTaskTime(suggestedTaskTime());
+  }
   openDialog(taskDialog);
 }
 
@@ -1664,14 +1666,13 @@ function openTaskEditor(taskId) {
   }
   editingTaskId = taskId;
   editingHabitId = null;
+  taskDialogEntryType = "task";
   taskTimeSelected = task.scheduledAt !== null;
   const form = document.querySelector("#task-form");
   form.elements.name.value = task.name;
   form.elements.minutes.value = String(task.minutes);
   document.querySelector("#task-time-control").hidden = false;
   document.querySelector("#task-time-picker").hidden = true;
-  document.querySelector("#task-type-fieldset").hidden = true;
-  document.querySelector("#task-type-error").hidden = true;
   document.querySelector("#task-form-hint").hidden = false;
   setTaskTime(task.scheduledAt || suggestedTaskTime());
   document.querySelector("#task-dialog-title").textContent = "Edit task";
@@ -1715,13 +1716,13 @@ function openHabitEditor(habitId) {
   }
   editingTaskId = null;
   editingHabitId = habitId;
+  taskDialogEntryType = "habit";
+  taskTimeSelected = false;
   const form = document.querySelector("#task-form");
   form.elements.name.value = habit.name;
   form.elements.minutes.value = String(habit.minutes);
   document.querySelector("#task-time-control").hidden = true;
   document.querySelector("#task-time-picker").hidden = true;
-  document.querySelector("#task-type-fieldset").hidden = true;
-  document.querySelector("#task-type-error").hidden = true;
   document.querySelector("#task-dialog-title").textContent = "Edit daily habit";
   form.querySelector('[type="submit"]').textContent = "Save changes";
   document.querySelector("#task-form-hint").hidden = true;
@@ -2075,13 +2076,8 @@ document.querySelector("#sign-out").addEventListener("click", async () => {
 
 document.querySelector("#open-task-dialog").addEventListener("click", openNewTaskDialog);
 document.querySelector("#empty-add-task").addEventListener("click", openNewTaskDialog);
+document.querySelector("#open-habit-dialog").addEventListener("click", openNewHabitDialog);
 document.querySelector("#open-bad-dialog").addEventListener("click", openNewBadHabitDialog);
-document.querySelectorAll('input[name="taskType"]').forEach((radio) => {
-  radio.addEventListener("change", () => {
-    document.querySelector("#task-type-error").hidden = true;
-    updateTaskTypeSelection();
-  });
-});
 document.querySelector("#suggested-task-time").addEventListener("click", () => {
   taskTimeSelected = true;
   document.querySelector("#task-time-picker").hidden = true;
@@ -2107,6 +2103,17 @@ document.querySelector("#undo-delete-habit").addEventListener("click", undoRemov
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
 });
+taskDialog.addEventListener("click", (event) => {
+  if (event.target === taskDialog) {
+    taskDialog.close();
+  }
+});
+taskDialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    taskDialog.close();
+  }
+});
 document.querySelector("#keep-task-going").addEventListener("click", () => cancelTaskDialog.close());
 document.querySelector("#confirm-cancel-task").addEventListener("click", confirmCancelTask);
 cancelTaskDialog.addEventListener("close", () => {
@@ -2129,7 +2136,6 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
   }
   const name = form.elements.name.value.trim();
   const minutes = Number(form.elements.minutes.value);
-  const taskType = form.elements.taskType.value;
   const scheduledAt = taskTimeSelected ? parseLocalDateTime(form.elements.startAt.value) : null;
   if (!name || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
     showNotice("Add a task name and a duration between 1 and 1,440 minutes.");
@@ -2139,23 +2145,17 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
     showNotice("Choose a valid local date and time for this task.");
     return;
   }
-  if (!editingHabitId && !editingTaskId && !taskType) {
-    document.querySelector("#task-type-error").hidden = false;
-    form.querySelector('input[name="taskType"]').focus();
-    return;
-  }
   if (editingHabitId) {
     updateHabit(editingHabitId, name, minutes);
   } else if (editingTaskId) {
     updateTask(editingTaskId, { name, minutes, scheduledAt });
   } else {
-    createTask({ name, minutes, scheduledAt, saveAsHabit: taskType === "habit" });
+    createTask({ name, minutes, scheduledAt, saveAsHabit: taskDialogEntryType === "habit" });
   }
   editingTaskId = null;
   editingHabitId = null;
+  taskDialogEntryType = "task";
   form.reset();
-  document.querySelector("#task-type-error").hidden = true;
-  updateTaskTypeSelection();
   taskDialog.close();
 });
 
