@@ -1625,6 +1625,237 @@ function initializeSummaryBar() {
   }
 }
 
+function createDurationPicker(container, initialMinutes, onChange) {
+  const choices = [5, 15, 30, 45, 60];
+  const hours = Array.from({ length: 25 }, (_, index) => index);
+  let minuteValues = [];
+  let minuteStep = 5;
+  let selectedHours = 0;
+  let selectedMinutes = 30;
+  const scrollTimers = new WeakMap();
+
+  container.innerHTML = `
+    <div class="duration-quick-picks" aria-label="Quick durations">
+      ${choices.map((minutes) => `<button class="duration-chip" type="button" data-minutes="${minutes}">${minutes} min</button>`).join("")}
+    </div>
+    <div class="duration-wheels">
+      <div class="duration-wheel-column">
+        <span class="duration-wheel-label">Hours</span>
+        <div class="duration-wheel" data-unit="hours" role="group" aria-label="Hours">
+          <div class="duration-wheel-list"></div>
+        </div>
+      </div>
+      <div class="duration-wheel-column">
+        <div class="duration-wheel-heading">
+          <span class="duration-wheel-label">Minutes</span>
+          <button class="duration-step-toggle" type="button" aria-pressed="false">Use 1 min steps</button>
+        </div>
+        <div class="duration-wheel" data-unit="minutes" role="group" aria-label="Minutes">
+          <div class="duration-wheel-list"></div>
+        </div>
+      </div>
+      <p class="duration-summary" aria-live="polite"></p>
+    </div>
+  `;
+
+  const hourWheel = container.querySelector('[data-unit="hours"]');
+  const minuteWheel = container.querySelector('[data-unit="minutes"]');
+  const stepToggle = container.querySelector(".duration-step-toggle");
+  const summary = container.querySelector(".duration-summary");
+  const chips = Array.from(container.querySelectorAll(".duration-chip"));
+
+  function valuesForMinutes() {
+    return selectedHours === 24
+      ? [0]
+      : Array.from({ length: 60 / minuteStep }, (_, index) => index * minuteStep);
+  }
+
+  function itemHeight(wheel) {
+    const item = wheel.querySelector(".duration-wheel-item");
+    return item ? parseFloat(getComputedStyle(item).height) || 44 : 44;
+  }
+
+  function wheelIndex(wheel) {
+    const items = wheel.querySelectorAll(".duration-wheel-item");
+    return Math.max(0, Math.min(items.length - 1, Math.round(wheel.scrollTop / itemHeight(wheel))));
+  }
+
+  function centerWheel(wheel, value, behavior) {
+    const items = Array.from(wheel.querySelectorAll(".duration-wheel-item"));
+    const index = items.findIndex((item) => Number(item.dataset.value) === value);
+    if (index >= 0) {
+      wheel.scrollTo({ top: index * itemHeight(wheel), behavior });
+    }
+  }
+
+  function updateWheelState(wheel, selectedValue) {
+    wheel.querySelectorAll(".duration-wheel-item").forEach((item) => {
+      item.setAttribute("aria-pressed", String(Number(item.dataset.value) === selectedValue));
+    });
+  }
+
+  function renderWheel(wheel, values, unit) {
+    const list = wheel.querySelector(".duration-wheel-list");
+    const fragment = document.createDocumentFragment();
+    values.forEach((value) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "duration-wheel-item";
+      item.dataset.value = String(value);
+      item.textContent = String(value);
+      item.setAttribute("aria-pressed", "false");
+      item.setAttribute(
+        "aria-label",
+        unit === "hours"
+          ? `${value} ${value === 1 ? "hour" : "hours"}`
+          : `${value} ${value === 1 ? "minute" : "minutes"}`,
+      );
+      item.addEventListener("click", () => chooseValue(unit, value, "smooth"));
+      fragment.append(item);
+    });
+    list.replaceChildren(fragment);
+  }
+
+  function formatSummary() {
+    if (selectedHours && selectedMinutes) {
+      return `${selectedHours} h ${selectedMinutes} min`;
+    }
+    if (selectedHours) {
+      return `${selectedHours} h`;
+    }
+    return `${selectedMinutes} min`;
+  }
+
+  function updateReadout() {
+    const total = selectedHours * 60 + selectedMinutes;
+    summary.textContent = formatSummary();
+    chips.forEach((chip) => {
+      chip.setAttribute("aria-pressed", String(Number(chip.dataset.minutes) === total));
+    });
+    updateWheelState(hourWheel, selectedHours);
+    updateWheelState(minuteWheel, selectedMinutes);
+    onChange(total);
+  }
+
+  function chooseValue(unit, value, behavior) {
+    if (unit === "hours") {
+      const previousHours = selectedHours;
+      selectedHours = value;
+      if (selectedHours === 24 || previousHours === 24) {
+        if (selectedHours === 24) {
+          selectedMinutes = 0;
+        }
+        minuteValues = valuesForMinutes();
+        renderWheel(minuteWheel, minuteValues, "minutes");
+        centerWheel(minuteWheel, selectedMinutes, behavior);
+      }
+      centerWheel(hourWheel, selectedHours, behavior);
+    } else {
+      selectedMinutes = value;
+      centerWheel(minuteWheel, selectedMinutes, behavior);
+    }
+    updateReadout();
+  }
+
+  function commitWheel(wheel) {
+    clearTimeout(scrollTimers.get(wheel));
+    const unit = wheel.dataset.unit;
+    const values = unit === "hours" ? hours : minuteValues;
+    const value = values[wheelIndex(wheel)];
+    if (Number.isFinite(value)) {
+      chooseValue(unit, value, "auto");
+    }
+  }
+
+  function scheduleWheelCommit(wheel) {
+    clearTimeout(scrollTimers.get(wheel));
+    scrollTimers.set(wheel, setTimeout(() => commitWheel(wheel), 120));
+  }
+
+  function attachWheelEvents(wheel) {
+    wheel.addEventListener("scroll", () => scheduleWheelCommit(wheel), { passive: true });
+    wheel.addEventListener("scrollend", () => commitWheel(wheel));
+    wheel.addEventListener("wheel", (event) => {
+      if (!event.deltaY) {
+        return;
+      }
+      event.preventDefault();
+      const unit = wheel.dataset.unit;
+      const values = unit === "hours" ? hours : minuteValues;
+      const currentValue = unit === "hours" ? selectedHours : selectedMinutes;
+      const index = values.indexOf(currentValue);
+      const nextIndex = Math.max(0, Math.min(values.length - 1, index + (event.deltaY > 0 ? 1 : -1)));
+      chooseValue(unit, values[nextIndex], "auto");
+    }, { passive: false });
+  }
+
+  function renderMinutesWheel() {
+    minuteValues = valuesForMinutes();
+    renderWheel(minuteWheel, minuteValues, "minutes");
+  }
+
+  function setValue(minutes, options = {}) {
+    const total = Number.isFinite(minutes) ? Math.min(1440, Math.max(0, Math.round(minutes))) : 30;
+    selectedHours = Math.floor(total / 60);
+    selectedMinutes = total % 60;
+    minuteStep = selectedMinutes % 5 === 0 ? 5 : 1;
+    stepToggle.setAttribute("aria-pressed", String(minuteStep === 1));
+    stepToggle.textContent = minuteStep === 1 ? "Use 5 min steps" : "Use 1 min steps";
+    renderMinutesWheel();
+    centerWheel(hourWheel, selectedHours, options.smooth ? "smooth" : "auto");
+    centerWheel(minuteWheel, selectedMinutes, options.smooth ? "smooth" : "auto");
+    updateReadout();
+  }
+
+  renderWheel(hourWheel, hours, "hours");
+  renderMinutesWheel();
+  attachWheelEvents(hourWheel);
+  attachWheelEvents(minuteWheel);
+
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => setValue(Number(chip.dataset.minutes), { smooth: true }));
+  });
+
+  stepToggle.addEventListener("click", () => {
+    if (minuteStep === 5) {
+      minuteStep = 1;
+    } else {
+      const roundedMinutes = Math.round(selectedMinutes / 5) * 5;
+      if (roundedMinutes === 60) {
+        selectedHours = Math.min(24, selectedHours + 1);
+        selectedMinutes = 0;
+      } else {
+        selectedMinutes = roundedMinutes;
+      }
+      minuteStep = 5;
+    }
+    stepToggle.setAttribute("aria-pressed", String(minuteStep === 1));
+    stepToggle.textContent = minuteStep === 1 ? "Use 5 min steps" : "Use 1 min steps";
+    renderMinutesWheel();
+    centerWheel(hourWheel, selectedHours, "smooth");
+    centerWheel(minuteWheel, selectedMinutes, "smooth");
+    updateReadout();
+  });
+
+  const picker = {
+    setValue,
+    refresh() {
+      centerWheel(hourWheel, selectedHours, "auto");
+      centerWheel(minuteWheel, selectedMinutes, "auto");
+    },
+  };
+  picker.setValue(initialMinutes);
+  return picker;
+}
+
+const taskDurationPicker = createDurationPicker(
+  document.querySelector("#task-duration-picker"),
+  30,
+  (minutes) => {
+    document.querySelector("#task-minutes").value = String(minutes);
+  },
+);
+
 function openDialog(dialog) {
   if (typeof dialog.showModal === "function") {
     dialog.showModal();
@@ -1648,6 +1879,7 @@ function openNewEntryDialog(entryType) {
   taskTimeSelected = entryType === "task";
   const form = document.querySelector("#task-form");
   form.reset();
+  taskDurationPicker.setValue(30);
   document.querySelector("#task-time-control").hidden = entryType === "habit";
   document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-dialog-title").textContent = `Add ${entryType}`;
@@ -1657,6 +1889,7 @@ function openNewEntryDialog(entryType) {
     setTaskTime(suggestedTaskTime());
   }
   openDialog(taskDialog);
+  requestAnimationFrame(() => taskDurationPicker.refresh());
 }
 
 function openTaskEditor(taskId) {
@@ -1670,7 +1903,7 @@ function openTaskEditor(taskId) {
   taskTimeSelected = task.scheduledAt !== null;
   const form = document.querySelector("#task-form");
   form.elements.name.value = task.name;
-  form.elements.minutes.value = String(task.minutes);
+  taskDurationPicker.setValue(task.minutes);
   document.querySelector("#task-time-control").hidden = false;
   document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-form-hint").hidden = false;
@@ -1678,6 +1911,7 @@ function openTaskEditor(taskId) {
   document.querySelector("#task-dialog-title").textContent = "Edit task";
   form.querySelector('[type="submit"]').textContent = "Save changes";
   openDialog(taskDialog);
+  requestAnimationFrame(() => taskDurationPicker.refresh());
 }
 
 function suggestedTaskTime() {
@@ -1720,13 +1954,14 @@ function openHabitEditor(habitId) {
   taskTimeSelected = false;
   const form = document.querySelector("#task-form");
   form.elements.name.value = habit.name;
-  form.elements.minutes.value = String(habit.minutes);
+  taskDurationPicker.setValue(habit.minutes);
   document.querySelector("#task-time-control").hidden = true;
   document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-dialog-title").textContent = "Edit daily habit";
   form.querySelector('[type="submit"]').textContent = "Save changes";
   document.querySelector("#task-form-hint").hidden = true;
   openDialog(taskDialog);
+  requestAnimationFrame(() => taskDurationPicker.refresh());
 }
 
 function toLocalDateTimeInput(timestamp) {

@@ -239,10 +239,9 @@
         </div>
         <label for="task-name">What would you like to do?</label>
         <input id="task-name" name="name" type="text" maxlength="80" placeholder="e.g. Tidy the kitchen" required />
-        <label for="task-minutes">How much time would you like to give it?</label>
-        <div class="duration-input">
-          <input id="task-minutes" name="minutes" type="number" min="1" max="1440" value="30" required />
-          <span>minutes</span>
+        <p class="duration-question" id="task-duration-label">How much time would you like to give it?</p>
+        <input id="task-minutes" name="minutes" type="hidden" value="30" />
+        <div class="duration-picker" id="task-duration-picker" role="group" aria-labelledby="task-duration-label">
         </div>
         <div class="task-time-control" id="task-time-control">
           <span class="time-label">Start time</span>
