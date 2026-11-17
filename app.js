@@ -1,4 +1,5 @@
 const STORAGE_KEY = "steady-habit-board-v1";
+const BANK_STORAGE_KEY = "steady-task-bank-v1";
 const STATE_VERSION = 6;
 const HABIT_UNDO_DURATION_MS = 9000;
 const TAB_STORAGE_KEY = "steady-active-tab-v1";
@@ -33,6 +34,9 @@ const badDialog = document.querySelector("#bad-dialog");
 const cancelTaskDialog = document.querySelector("#cancel-task-dialog");
 const overtimeDialog = document.querySelector("#overtime-dialog");
 const taskList = document.querySelector("#task-list");
+const bankList = document.querySelector("#bank-list");
+const bankDialog = document.querySelector("#bank-dialog");
+const bankChooserDialog = document.querySelector("#bank-chooser-dialog");
 const routineList = document.querySelector("#routine-list");
 const badHabitList = document.querySelector("#bad-habit-list");
 const notice = document.querySelector("#storage-notice");
@@ -67,6 +71,7 @@ if (hasSupabaseConfig) {
 let activePauseId = null;
 let editingTaskId = null;
 let editingHabitId = null;
+let editingBankId = null;
 let taskDialogEntryType = "task";
 let taskTimeSelected = true;
 let editingBadHabitId = null;
@@ -80,6 +85,8 @@ let pendingCancelTaskId = null;
 let pendingOvertimeTaskId = null;
 let previousStreakCount = null;
 let currentQuoteIndex = null;
+let feedbackToastTimer = null;
+let bank = loadBank();
 let state = loadState();
 let currentUser = null;
 let accountReady = false;
@@ -357,6 +364,58 @@ function loadState() {
   return migrated;
 }
 
+function normalizeBankTemplate(template) {
+  if (
+    !template ||
+    typeof template.id !== "string" ||
+    !template.id ||
+    typeof template.title !== "string" ||
+    !template.title.trim() ||
+    (template.minutes !== null &&
+      (!Number.isInteger(template.minutes) || template.minutes < 1 || template.minutes > 1440))
+  ) {
+    return null;
+  }
+  return {
+    id: template.id,
+    title: template.title.trim(),
+    minutes: template.minutes,
+    category: typeof template.category === "string" ? template.category.trim() : "",
+    notes: typeof template.notes === "string" ? template.notes.trim() : "",
+  };
+}
+
+function loadBank() {
+  let saved;
+  try {
+    saved = localStorage.getItem(BANK_STORAGE_KEY);
+  } catch (error) {
+    console.error("Could not read the task bank.", error);
+    showNotice("Your task bank couldn’t be read. You can use it for now, but changes may not be saved.");
+    return [];
+  }
+  if (!saved) {
+    return [];
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(saved);
+  } catch (error) {
+    console.error("The saved task bank is not valid JSON.", error);
+    showNotice("Saved task templates could not be read. The Bank is empty; your stored data has not been changed.");
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    showNotice("The saved task bank has an unsupported format. The Bank is empty.");
+    return [];
+  }
+  const templates = parsed.map(normalizeBankTemplate).filter(Boolean);
+  if (templates.length !== parsed.length) {
+    showNotice("Some saved task templates could not be read and were skipped.");
+  }
+  return templates;
+}
+
 function saveState() {
   if (currentUser) {
     if (!accountReady) {
@@ -380,6 +439,7 @@ function saveState() {
 function queueCloudSave(userId) {
   const revision = ++saveRevision;
   const snapshot = JSON.parse(JSON.stringify(state));
+  snapshot.bank = bank.map((template) => ({ ...template }));
   setSaveStatus("Saving to your account…");
   cloudWriteQueue = cloudWriteQueue.then(async () => {
     if (currentUser?.id !== userId) {
@@ -402,6 +462,26 @@ function queueCloudSave(userId) {
     showNotice("Your latest change couldn’t sync to your account. Check your connection and try again.");
     setSaveStatus("Not synced");
   });
+}
+
+function saveBank() {
+  if (currentUser) {
+    if (!accountReady) {
+      showNotice("Your account board is still loading. This change has not been saved.");
+      return false;
+    }
+    queueCloudSave(currentUser.id);
+    return true;
+  }
+  try {
+    localStorage.setItem(BANK_STORAGE_KEY, JSON.stringify(bank));
+    setSaveStatus("Saved on this device");
+    return true;
+  } catch (error) {
+    console.error("Could not save the task bank.", error);
+    showNotice("Your browser couldn’t save this template. The Bank will stay available until you close this page.");
+    return false;
+  }
 }
 
 function escapeText(value) {
@@ -1196,6 +1276,127 @@ function updateSummary() {
   document.querySelector("#habit-count").textContent = String(state.habits.length);
 }
 
+function showFeedbackToast(message) {
+  const toast = document.querySelector("#feedback-toast");
+  toast.textContent = message;
+  toast.hidden = false;
+  if (feedbackToastTimer) {
+    window.clearTimeout(feedbackToastTimer);
+  }
+  feedbackToastTimer = window.setTimeout(() => {
+    toast.hidden = true;
+    feedbackToastTimer = null;
+  }, 2400);
+}
+
+function saveTaskToBank(title, minutes) {
+  const existing = bank.find(
+    (template) => template.title.toLocaleLowerCase() === title.toLocaleLowerCase()
+  );
+  if (existing) {
+    existing.title = title;
+    existing.minutes = minutes;
+  } else {
+    bank.unshift({
+      id: createId(),
+      title,
+      minutes,
+      category: "",
+      notes: "",
+    });
+  }
+  const saved = saveBank();
+  renderBank();
+  if (saved) {
+    showFeedbackToast(existing ? "Bank template updated" : "Saved to Bank");
+  }
+}
+
+function buildBankTemplate(template) {
+  const card = makeElement("article", "bank-template");
+  const info = makeElement("div", "bank-template-info");
+  const titleRow = makeElement("div", "bank-template-title-row");
+  titleRow.append(makeElement("h3", "bank-template-title", template.title));
+  if (template.category) {
+    titleRow.append(makeElement("span", "bank-template-category", template.category));
+  }
+  info.append(titleRow);
+  info.append(makeElement(
+    "p",
+    "bank-template-duration",
+    template.minutes ? `${template.minutes} min` : "No duration set"
+  ));
+  if (template.notes) {
+    info.append(makeElement("p", "bank-template-notes", template.notes));
+  }
+  card.append(info);
+
+  const actions = makeElement("div", "bank-template-actions");
+  const use = makeElement("button", "button button-primary", "Use");
+  use.type = "button";
+  use.setAttribute("aria-label", `Add ${template.title} to Today`);
+  use.addEventListener("click", () => {
+    createTask({ name: template.title, minutes: template.minutes || 30 });
+    showFeedbackToast("Added to Today");
+  });
+  actions.append(use);
+
+  const edit = makeElement("button", "button button-secondary", "Edit");
+  edit.type = "button";
+  edit.setAttribute("aria-label", `Edit ${template.title}`);
+  edit.addEventListener("click", () => openBankEditor(template.id));
+  actions.append(edit);
+
+  const remove = makeElement("button", "button button-secondary", "Delete");
+  remove.type = "button";
+  remove.setAttribute("aria-label", `Delete ${template.title}`);
+  remove.addEventListener("click", () => {
+    if (!window.confirm(`Delete “${template.title}” from your Bank?`)) {
+      return;
+    }
+    bank = bank.filter((item) => item.id !== template.id);
+    const saved = saveBank();
+    render();
+    if (saved) {
+      showFeedbackToast("Template deleted");
+    }
+  });
+  actions.append(remove);
+  card.append(actions);
+  return card;
+}
+
+function renderBank() {
+  bankList.replaceChildren(...bank.map(buildBankTemplate));
+  document.querySelector("#bank-empty").hidden = bank.length > 0;
+}
+
+function renderBankChooser() {
+  const list = document.querySelector("#bank-chooser-list");
+  const empty = document.querySelector("#bank-chooser-empty");
+  list.replaceChildren();
+  empty.hidden = bank.length > 0;
+  for (const template of bank) {
+    const option = makeElement("button", "bank-chooser-option");
+    option.type = "button";
+    option.append(makeElement("span", "bank-chooser-option-title", template.title));
+    option.append(makeElement(
+      "span",
+      "bank-chooser-option-detail",
+      template.minutes ? `${template.minutes} min` : "30 min default"
+    ));
+    option.addEventListener("click", () => {
+      bankChooserDialog.close();
+      openNewTaskDialog();
+      const form = document.querySelector("#task-form");
+      form.elements.name.value = template.title;
+      taskDurationPicker.setValue(template.minutes || 30);
+      requestAnimationFrame(() => taskDurationPicker.refresh());
+    });
+    list.append(option);
+  }
+}
+
 function getStreakSummary() {
   const days = getCompletedHabitDays(state).filter((dayKey) => dayKey <= todayKey());
   if (!days.length) {
@@ -1276,6 +1477,7 @@ function render() {
 
   taskList.replaceChildren(...state.tasks.map(buildTaskCard));
   document.querySelector("#task-empty").hidden = state.tasks.length > 0;
+  renderBank();
 
   routineList.replaceChildren(...state.habits.map(buildRoutineItem));
   document.querySelector("#routine-count").textContent = `${state.habits.length} saved`;
@@ -1855,6 +2057,13 @@ const taskDurationPicker = createDurationPicker(
     document.querySelector("#task-minutes").value = String(minutes);
   },
 );
+const bankDurationPicker = createDurationPicker(
+  document.querySelector("#bank-duration-picker"),
+  30,
+  (minutes) => {
+    document.querySelector("#bank-minutes").value = String(minutes);
+  },
+);
 
 function openDialog(dialog) {
   if (typeof dialog.showModal === "function") {
@@ -1880,6 +2089,8 @@ function openNewEntryDialog(entryType) {
   const form = document.querySelector("#task-form");
   form.reset();
   taskDurationPicker.setValue(30);
+  document.querySelector("#task-bank-actions").hidden = entryType !== "task";
+  document.querySelector("#save-task-to-bank").checked = false;
   document.querySelector("#task-time-control").hidden = entryType === "habit";
   document.querySelector("#task-time-picker").hidden = true;
   document.querySelector("#task-dialog-title").textContent = `Add ${entryType}`;
@@ -1902,6 +2113,8 @@ function openTaskEditor(taskId) {
   taskDialogEntryType = "task";
   taskTimeSelected = task.scheduledAt !== null;
   const form = document.querySelector("#task-form");
+  document.querySelector("#task-bank-actions").hidden = true;
+  document.querySelector("#save-task-to-bank").checked = false;
   form.elements.name.value = task.name;
   taskDurationPicker.setValue(task.minutes);
   document.querySelector("#task-time-control").hidden = false;
@@ -1912,6 +2125,34 @@ function openTaskEditor(taskId) {
   form.querySelector('[type="submit"]').textContent = "Save changes";
   openDialog(taskDialog);
   requestAnimationFrame(() => taskDurationPicker.refresh());
+}
+
+function openBankEditor(templateId = null) {
+  const template = templateId ? bank.find((item) => item.id === templateId) : null;
+  if (templateId && !template) {
+    return;
+  }
+  editingBankId = template ? template.id : null;
+  const form = document.querySelector("#bank-form");
+  form.reset();
+  form.elements.title.value = template ? template.title : "";
+  form.elements.category.value = template ? template.category : "";
+  form.elements.notes.value = template ? template.notes : "";
+  form.elements.durationEnabled.checked = Boolean(template && template.minutes);
+  document.querySelector("#bank-duration-fields").hidden = !form.elements.durationEnabled.checked;
+  bankDurationPicker.setValue(template?.minutes || 30);
+  document.querySelector("#bank-dialog-title").textContent = template ? "Edit template" : "Add a template";
+  form.querySelector('[type="submit"]').textContent = template ? "Save changes" : "Save template";
+  openDialog(bankDialog);
+  if (form.elements.durationEnabled.checked) {
+    requestAnimationFrame(() => bankDurationPicker.refresh());
+  }
+}
+
+function openBankChooser() {
+  document.querySelector("#task-dialog").close();
+  renderBankChooser();
+  openDialog(bankChooserDialog);
 }
 
 function suggestedTaskTime() {
@@ -1953,6 +2194,8 @@ function openHabitEditor(habitId) {
   taskDialogEntryType = "habit";
   taskTimeSelected = false;
   const form = document.querySelector("#task-form");
+  document.querySelector("#task-bank-actions").hidden = true;
+  document.querySelector("#save-task-to-bank").checked = false;
   form.elements.name.value = habit.name;
   taskDurationPicker.setValue(habit.minutes);
   document.querySelector("#task-time-control").hidden = true;
@@ -2037,7 +2280,8 @@ function hasBoardData(boardState) {
   return boardState.tasks.length > 0 ||
     boardState.habits.length > 0 ||
     boardState.badHabits.length > 0 ||
-    boardState.history.length > 0;
+    boardState.history.length > 0 ||
+    bank.length > 0;
 }
 
 async function activateAccount(user) {
@@ -2050,6 +2294,7 @@ async function activateAccount(user) {
     accountReady = true;
     cloudWriteError = null;
     state = loadState();
+    bank = loadBank();
     document.querySelector("main").inert = false;
     setSaveStatus("Saved on this device");
     renderAccountControls();
@@ -2083,14 +2328,27 @@ async function activateAccount(user) {
       if (!accountBoard || !isValidState(accountBoard)) {
         throw new Error("The account board has an unsupported data format.");
       }
-      state = accountBoard;
+      if (accountBoard.bank !== undefined && !Array.isArray(accountBoard.bank)) {
+        throw new Error("The account task bank has an unsupported data format.");
+      }
+      const accountBank = Array.isArray(accountBoard.bank)
+        ? accountBoard.bank.map(normalizeBankTemplate)
+        : [];
+      if (accountBank.some((template) => !template)) {
+        throw new Error("The account task bank contains an invalid template.");
+      }
+      bank = accountBank;
+      state = { ...accountBoard };
+      delete state.bank;
       cloudStateNeedsUpgrade = accountBoard !== data.board_state;
     } else {
       const localState = loadState();
-      const copyLocalBoard = hasBoardData(localState) && window.confirm(
-        "This account has no saved board yet. Copy this device’s current tasks and habits to the account? Choose Cancel to keep them only on this device."
+      const localBank = loadBank();
+      const copyLocalBoard = (hasBoardData(localState) || localBank.length > 0) && window.confirm(
+        "This account has no saved board yet. Copy this device’s tasks, habits, and templates to the account? Choose Cancel to keep them only on this device."
       );
       state = copyLocalBoard ? localState : makeDefaultState();
+      bank = copyLocalBoard ? localBank : [];
     }
 
     accountReady = true;
@@ -2313,6 +2571,16 @@ document.querySelector("#open-task-dialog").addEventListener("click", openNewTas
 document.querySelector("#empty-add-task").addEventListener("click", openNewTaskDialog);
 document.querySelector("#open-habit-dialog").addEventListener("click", openNewHabitDialog);
 document.querySelector("#open-bad-dialog").addEventListener("click", openNewBadHabitDialog);
+document.querySelector("#open-bank-dialog").addEventListener("click", () => openBankEditor());
+document.querySelector("#empty-add-template").addEventListener("click", () => openBankEditor());
+document.querySelector("#choose-from-bank").addEventListener("click", openBankChooser);
+document.querySelector("#bank-duration-enabled").addEventListener("change", (event) => {
+  const fields = document.querySelector("#bank-duration-fields");
+  fields.hidden = !event.currentTarget.checked;
+  if (!fields.hidden) {
+    requestAnimationFrame(() => bankDurationPicker.refresh());
+  }
+});
 document.querySelector("#suggested-task-time").addEventListener("click", () => {
   taskTimeSelected = true;
   document.querySelector("#task-time-picker").hidden = true;
@@ -2386,12 +2654,59 @@ document.querySelector("#task-form").addEventListener("submit", (event) => {
     updateTask(editingTaskId, { name, minutes, scheduledAt });
   } else {
     createTask({ name, minutes, scheduledAt, saveAsHabit: taskDialogEntryType === "habit" });
+    if (taskDialogEntryType === "task" && document.querySelector("#save-task-to-bank").checked) {
+      saveTaskToBank(name, minutes);
+    }
   }
   editingTaskId = null;
   editingHabitId = null;
   taskDialogEntryType = "task";
   form.reset();
   taskDialog.close();
+});
+
+document.querySelector("#bank-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) {
+    return;
+  }
+  const title = form.elements.title.value.trim();
+  const durationEnabled = form.elements.durationEnabled.checked;
+  const minutes = durationEnabled ? Number(form.elements.minutes.value) : null;
+  if (!title || (durationEnabled && (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440))) {
+    showNotice("Add a template title and choose a duration between 1 and 1,440 minutes.");
+    return;
+  }
+  const duplicate = bank.find(
+    (template) =>
+      template.id !== editingBankId &&
+      template.title.toLocaleLowerCase() === title.toLocaleLowerCase()
+  );
+  if (duplicate) {
+    showNotice("A template with that title already exists. Choose a different title.");
+    return;
+  }
+  const template = {
+    id: editingBankId || createId(),
+    title,
+    minutes,
+    category: form.elements.category.value.trim(),
+    notes: form.elements.notes.value.trim(),
+  };
+  const existingIndex = bank.findIndex((item) => item.id === template.id);
+  if (existingIndex === -1) {
+    bank.unshift(template);
+  } else {
+    bank[existingIndex] = template;
+  }
+  const saved = saveBank();
+  render();
+  bankDialog.close();
+  editingBankId = null;
+  if (saved) {
+    showFeedbackToast(existingIndex === -1 ? "Template saved" : "Template updated");
+  }
 });
 
 document.querySelector("#bad-form").addEventListener("submit", (event) => {

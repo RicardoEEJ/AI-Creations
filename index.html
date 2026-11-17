@@ -195,10 +195,23 @@
         </section>
 
         <section class="app-view" id="bank-view" data-app-view="bank" aria-labelledby="bank-title" hidden>
-          <section class="panel bank-placeholder">
-            <p class="eyebrow">A LITTLE SOMETHING TO LOOK FORWARD TO</p>
-            <h2 id="bank-title">Your Bank</h2>
-            <p class="section-description">Coming soon.</p>
+          <section class="panel bank-panel" aria-labelledby="bank-title">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">READY WHEN YOU NEED IT</p>
+                <h2 id="bank-title">Your Task Bank</h2>
+              </div>
+              <button class="button button-primary" id="open-bank-dialog" type="button">
+                <span aria-hidden="true">+</span> Add template
+              </button>
+            </div>
+            <div class="bank-list" id="bank-list"></div>
+            <div class="empty-state" id="bank-empty">
+              <span class="empty-icon" aria-hidden="true">▣</span>
+              <h3>Make repeat tasks easier</h3>
+              <p>Save task ideas here, then add one to Today whenever you need it.</p>
+              <button class="button button-secondary" id="empty-add-template" type="button">+ Add template</button>
+            </div>
           </section>
         </section>
       </main>
@@ -239,6 +252,13 @@
         </div>
         <label for="task-name">What would you like to do?</label>
         <input id="task-name" name="name" type="text" maxlength="80" placeholder="e.g. Tidy the kitchen" required />
+        <div class="task-bank-actions" id="task-bank-actions">
+          <label class="checkbox-row" for="save-task-to-bank">
+            <input id="save-task-to-bank" name="saveToBank" type="checkbox" />
+            <span>Save to bank</span>
+          </label>
+          <button class="button button-secondary" id="choose-from-bank" type="button">Choose from bank</button>
+        </div>
         <p class="duration-question" id="task-duration-label">How much time would you like to give it?</p>
         <input id="task-minutes" name="minutes" type="hidden" value="30" />
         <div class="duration-picker" id="task-duration-picker" role="group" aria-labelledby="task-duration-label">
@@ -263,10 +283,56 @@
       </form>
     </dialog>
 
+    <dialog class="form-dialog" id="bank-dialog" aria-labelledby="bank-dialog-title">
+      <form id="bank-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">A TASK YOU CAN REUSE</p>
+            <h2 id="bank-dialog-title">Add a template</h2>
+          </div>
+          <button class="dialog-close" type="button" data-close-dialog="bank-dialog" aria-label="Close">×</button>
+        </div>
+        <label for="bank-title-input">Task title</label>
+        <input id="bank-title-input" name="title" type="text" maxlength="80" placeholder="e.g. Give advice on this" required />
+        <label class="checkbox-row bank-duration-toggle" for="bank-duration-enabled">
+          <input id="bank-duration-enabled" name="durationEnabled" type="checkbox" />
+          <span>Include a duration</span>
+        </label>
+        <div id="bank-duration-fields" hidden>
+          <p class="duration-question" id="bank-duration-label">How much time would you like to give it?</p>
+          <input id="bank-minutes" name="minutes" type="hidden" value="30" />
+          <div class="duration-picker" id="bank-duration-picker" role="group" aria-labelledby="bank-duration-label"></div>
+        </div>
+        <label for="bank-category">Category <span class="optional-label">(optional)</span></label>
+        <input id="bank-category" name="category" type="text" maxlength="40" placeholder="e.g. Work" />
+        <label for="bank-notes">Notes <span class="optional-label">(optional)</span></label>
+        <textarea id="bank-notes" name="notes" maxlength="300" rows="3" placeholder="Anything helpful to remember"></textarea>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close-dialog="bank-dialog">Cancel</button>
+          <button class="button button-primary" type="submit">Save template</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="form-dialog" id="bank-chooser-dialog" aria-labelledby="bank-chooser-title">
+      <div class="chooser-content">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p>
+            <h2 id="bank-chooser-title">Choose a template</h2>
+          </div>
+          <button class="dialog-close" type="button" data-close-dialog="bank-chooser-dialog" aria-label="Close">×</button>
+        </div>
+        <div class="bank-chooser-list" id="bank-chooser-list"></div>
+        <p class="bank-chooser-empty" id="bank-chooser-empty" hidden>No templates yet. Add one to your Bank first.</p>
+      </div>
+    </dialog>
+
     <div class="undo-toast" id="undo-toast" role="status" aria-live="polite" hidden>
       <span id="undo-toast-message"></span>
       <button class="undo-button" id="undo-delete-habit" type="button">Undo</button>
     </div>
+    <div class="undo-toast feedback-toast" id="feedback-toast" role="status" aria-live="polite" hidden></div>
 
     <dialog class="form-dialog confirmation-dialog" id="cancel-task-dialog" aria-labelledby="cancel-task-title">
       <div class="confirmation-content">

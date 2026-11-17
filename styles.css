@@ -106,14 +106,127 @@ input:focus-visible,
   line-height: 1;
 }
 
-.bank-placeholder {
+.bank-panel {
   margin-top: 24px;
-  padding: 30px;
+  padding: 23px;
 }
 
-.bank-placeholder h2,
-.bank-placeholder p:last-child {
-  margin-bottom: 8px;
+.bank-panel .section-heading h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.55px;
+}
+
+.bank-list,
+.bank-chooser-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bank-template {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #303a35;
+  border-radius: 14px;
+  background: #1c2320;
+}
+
+.bank-template-info {
+  min-width: 0;
+}
+
+.bank-template-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bank-template-title {
+  margin: 0;
+  font-size: 14px;
+}
+
+.bank-template-category {
+  padding: 3px 7px;
+  border: 1px solid #3a4141;
+  border-radius: 7px;
+  background: #242a28;
+  color: #a9b5ae;
+  font-size: 10px;
+}
+
+.bank-template-duration,
+.bank-template-notes {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.bank-template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.bank-template-actions .button {
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.bank-chooser-option {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid #39443d;
+  border-radius: 11px;
+  background: #131816;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bank-chooser-option:hover {
+  border-color: rgb(131 214 165 / 48%);
+  background: rgb(131 214 165 / 7%);
+}
+
+.bank-chooser-option-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.bank-chooser-option-detail,
+.optional-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.bank-chooser-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chooser-content {
+  padding: 24px;
+}
+
+.chooser-content .dialog-heading {
+  margin-bottom: 16px;
 }
 
 .topbar {
@@ -1417,6 +1530,60 @@ section[id] {
   font-weight: 600;
 }
 
+.form-dialog textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid #39443d;
+  border-radius: 10px;
+  background: #131816;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.form-dialog textarea::placeholder {
+  color: #66736b;
+}
+
+.checkbox-row {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 9px;
+  color: #dce5df;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green-strong);
+}
+
+.task-bank-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.task-bank-actions .button {
+  min-height: 42px;
+}
+
+.bank-duration-toggle {
+  margin-top: 15px;
+}
+
+#bank-duration-fields .duration-question {
+  margin-top: 8px;
+}
+
 .time-label {
   display: block;
   margin: 16px 0 7px;
@@ -1500,6 +1667,17 @@ section[id] {
   color: #e4ece6;
   box-shadow: 0 10px 35px rgb(0 0 0 / 35%);
   font-size: 12px;
+}
+
+.feedback-toast {
+  z-index: 31;
+  bottom: calc(82px + env(safe-area-inset-bottom));
+  justify-content: center;
+  min-height: 48px;
+  padding: 8px 18px;
+  border-color: rgb(131 214 165 / 38%);
+  background: #202a24;
+  color: #d7eddd;
 }
 
 .undo-button {
@@ -1967,8 +2145,24 @@ section[id] {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .bank-template {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bank-template-actions {
+    justify-content: flex-start;
+  }
+
   .task-actions {
     justify-content: flex-end;
+  }
+
+  .task-bank-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-bank-actions .button {
+    width: 100%;
   }
 
   .section-heading {
